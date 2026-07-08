@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gun Art Online Eye-Care + Item Classifier
 // @namespace    gunart-lowsat-classify
-// @version      3.0.0
+// @version      3.1.0
 // @description  Low-saturation eye-care theme + API-driven item classifier (equipment by slot/category/quality read from /api/forge/equipment, materials by attribute, market by slot/category) with a market MAX-quantity button. No polling; event-driven only.
 // @author       ArcGrove
 // @match        https://gunartonline.pages.dev/*
@@ -10,6 +10,11 @@
 // ==/UserScript==
 
 /* Changelog
+ * 3.1.0 - Equipment classification now works in the game's own native list view too. The list
+ *         toggle swaps .igrid grid cells for .listing-row rows (materials are .listing-row.inv-item-lr);
+ *         both carry the item id as their React fiber key, so the classifier now reads rows from the
+ *         .grid-wrap in either mode and filters by hiding those rows. Removed the earlier coexistence
+ *         code that targeted the separate "UI Extension" list (the wrong list).
  * 3.0.0 - Classifier reworked to be API-driven and event-driven (mirrors the "Gun Art Online UI
  *         Extension" architecture). Equipment attributes now come from the game's /api/forge/equipment
  *         response (slot, weapon tags, quality via name_rolls.quality, durability, lock) instead of
@@ -173,7 +178,6 @@
   'use strict';
 
   const FILTER_KEY = 'gao_cls_filters_v2';
-  const EQUIP_GRID_SELECTOR = '.inv-center .grid-wrap .igrid';
 
   // ---------------------------------------------------------------------------
   // Static maps (game data -> Traditional Chinese)
@@ -389,12 +393,14 @@
   // ---------------------------------------------------------------------------
   // Equipment classification over the native grid (.igrid) — data from the API store
   // ---------------------------------------------------------------------------
-  function parseCell(cell) {
-    const id = cellItemId(cell);
+  // An item element is either a grid cell (.cell--filled) or a native list row (.listing-row). Both
+  // carry the item id as their React fiber key, so classification comes from the API store either way.
+  function parseRow(el) {
+    const id = cellItemId(el);
     const eq = id != null ? equipmentById.get(id) : null;
     const type = typeOfEquipment(eq) || '未分類';
     const quality = eq ? qualityNameOfRoll(eq.name_rolls && eq.name_rolls.quality) : null;
-    const equipped = cell.classList.contains('cell--equipped');
+    const equipped = el.classList.contains('cell--equipped') || !!(eq && eq.equipped);
     let broken = false, worn = false, hasDur = false;
     if (eq) {
       const dur = Number(eq.durability);
@@ -405,7 +411,7 @@
         if (Number.isFinite(max) && dur < max) worn = true;
       }
     }
-    return { el: cell, type: type, quality: quality, equipped: equipped, broken: broken, worn: worn, hasDur: hasDur };
+    return { el: el, type: type, quality: quality, equipped: equipped, broken: broken, worn: worn, hasDur: hasDur };
   }
 
   function rowMatches(r) {
@@ -418,25 +424,37 @@
   }
 
   function ensureEquipmentBar() {
-    const grids = document.querySelectorAll(EQUIP_GRID_SELECTOR);
-    if (!grids.length) return;
-    Array.prototype.forEach.call(grids, ensureEquipmentBarFor);
+    const wraps = document.querySelectorAll('.inv-center .grid-wrap');
+    if (!wraps.length) return;
+    Array.prototype.forEach.call(wraps, ensureEquipmentBarForWrap);
   }
 
-  function ensureEquipmentBarFor(grid) {
-    const cells = Array.prototype.filter.call(grid.children, function (c) {
-      return c.classList && c.classList.contains('cell') && c.classList.contains('cell--filled');
+  // Equipment item elements in whichever display mode is active: grid cells (.igrid > .cell--filled)
+  // or the game's native list rows (.listing-row). Material rows are .listing-row.inv-item-lr and are
+  // excluded here (the material bar handles those).
+  function collectEquipmentRowEls(wrap) {
+    const grid = wrap.querySelector('.igrid');
+    if (grid) {
+      return Array.prototype.filter.call(grid.children, function (c) {
+        return c.classList && c.classList.contains('cell') && c.classList.contains('cell--filled');
+      });
+    }
+    return Array.prototype.filter.call(wrap.querySelectorAll('.listing-row'), function (el) {
+      return !el.classList.contains('inv-item-lr');
     });
-    if (!cells.length) return;
-    const rows = cells.map(parseCell);
+  }
 
-    const wrap = grid.closest('.grid-wrap') || grid.parentElement;
-
-    // Coexistence: the UI Extension's list view (條列模式) rebuilds its rows on any cell className
-    // change, so a class we set on those rows is wiped instantly. Instead we hide by position via a
-    // stylesheet (below) which keeps applying to the rebuilt rows. Rows share the grid's source order
-    // (direct filled cells), so row index i maps to the (i+1)-th row button.
-    const extList = wrap ? wrap.querySelector('.gao-ext-inventory-list') : null;
+  function ensureEquipmentBarForWrap(wrap) {
+    const head = wrap.querySelector('.grid-wrap__head');
+    let bar = wrap.querySelector('.gao-cls-bar:not(.gao-cls-matbar)');
+    const rowEls = collectEquipmentRowEls(wrap);
+    if (!rowEls.length) {
+      // Not showing equipment here (e.g. a non-equipment category): drop any stale bar.
+      if (bar) bar.remove();
+      delete wrap.dataset.gaoClsSig;
+      return;
+    }
+    const rows = rowEls.map(parseRow);
 
     const typesPresent = [], qualsPresent = [];
     const typeCount = {}, qualCount = {};
@@ -452,33 +470,15 @@
     });
     const signature = typesPresent.slice().sort().join(',') + '|' + qualsPresent.slice().sort().join(',') + '|' + (anyDur ? 'd' : '');
 
-    const head = wrap ? wrap.querySelector('.grid-wrap__head') : null;
-    let bar = wrap ? wrap.querySelector('.gao-cls-bar:not(.gao-cls-matbar)') : null;
     const misplaced = bar && head && bar.previousElementSibling !== head;
-    if (!bar || misplaced || (wrap && wrap.dataset.gaoClsSig !== signature)) {
+    if (!bar || misplaced || wrap.dataset.gaoClsSig !== signature) {
       if (bar) bar.remove();
       bar = buildEquipmentBar(typesPresent, qualsPresent, anyDur);
       if (head && head.parentElement) head.parentElement.insertBefore(bar, head.nextSibling);
-      else wrap.insertBefore(bar, grid);
-      if (wrap) wrap.dataset.gaoClsSig = signature;
+      else wrap.insertBefore(bar, wrap.firstChild);
+      wrap.dataset.gaoClsSig = signature;
     }
-    applyEquipmentFilters(bar, rows, extList, typeCount, qualCount);
-  }
-
-  // Hide UI-Extension list rows by position (survives its re-renders). Rows are the only <button>
-  // children of the list, so the (i+1)-th such button is our row i.
-  function applyExtListHiding(extList, hiddenIdx) {
-    let st = document.getElementById('gao-cls-extlist-style');
-    if (!extList || !hiddenIdx.length) { if (st) st.textContent = ''; return; }
-    if (!st) {
-      st = document.createElement('style');
-      st.id = 'gao-cls-extlist-style';
-      (document.head || document.documentElement).appendChild(st);
-    }
-    const sel = hiddenIdx.map(function (i) {
-      return '.gao-ext-inventory-list > .gao-ext-inventory-row:nth-of-type(' + (i + 1) + ')';
-    }).join(',');
-    st.textContent = sel + ' { display: none !important; }';
+    applyEquipmentFilters(bar, rows, typeCount, qualCount);
   }
 
   function buildEquipmentBar(typesPresent, qualsPresent, anyDur) {
@@ -571,15 +571,13 @@
     return bar;
   }
 
-  function applyEquipmentFilters(bar, rows, extList, typeCount, qualCount) {
+  function applyEquipmentFilters(bar, rows, typeCount, qualCount) {
     let shown = 0;
-    const hiddenIdx = [];
-    rows.forEach(function (r, i) {
+    rows.forEach(function (r) {
       const ok = rowMatches(r);
       r.el.classList.toggle('gao-cls-hidden-row', !ok);
-      if (ok) shown++; else hiddenIdx.push(i);
+      if (ok) shown++;
     });
-    applyExtListHiding(extList, hiddenIdx);
     if (!bar) return;
     const countEl = bar.querySelector('[data-gao-cls-count]');
     if (countEl) countEl.textContent = '顯示 ' + shown + ' / ' + rows.length + ' 件';
