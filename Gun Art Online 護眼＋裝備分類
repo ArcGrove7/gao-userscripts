@@ -1,0 +1,481 @@
+// ==UserScript==
+// @name         Gun Art Online 護眼＋裝備分類
+// @namespace    gunart-lowsat-classify
+// @version      1.0.0
+// @description  飽和護眼＋背包裝備分類篩選
+// @match        https://gunartonline.pages.dev/*
+// @run-at       document-idle
+// @grant        none
+// ==/UserScript==
+
+(() => {
+  "use strict";
+
+  const ATTR = "data-gao-theme";
+  const STORAGE_KEY = "gao-lowsat-enabled";
+  const THEME_CLASS = "gao-lowsat";
+  const MY_VALUE = "gao-lowsat";               // 掛進既有下拉選單的 option value
+  const MY_LABEL = "低飽和暗色（護眼 · WCAG AA）";
+  const NATIVE_SELECT = '[data-gao-ext="settings-theme-select"]';
+
+  // ---- 低飽和護眼 ----
+  // 低彩度但拉大「文字明度 vs 背景明度」差距。所有當文字用的色（text-*、q-*、stat-*）
+  // 在最亮背景 #20252e 上量測皆 ≥4.5:1；最低一項 4.65:1。
+
+  const DARK_LOWSAT_VARS = `
+    --bg-void:#12151a; --bg-deep:#181c22; --bg-panel:#181c22; --bg-elevated:#20252e;
+    --bg-input:#14171d; --bg-overlay:#12151ae0;
+    --border-faint:#8aa0b81a; --border-soft:#8aa0b82e; --border-default:#3a4450;
+    --border-strong:#566372; --border-glow:#519a9e4d;
+    --text-primary:#eef1f6; --text-secondary:#c3cad6; --text-tertiary:#98a1ae; --text-muted:#868e9b;
+
+    --cyan-50:#d9eaec; --cyan-100:#bcd8dd; --cyan-200:#95c1c8; --cyan-300:#6aa6b2;
+    --cyan-400:#4c8a94; --cyan-500:#3f707a; --cyan-600:#2e535a; --cyan-glow:#519a9e4d;
+    --red-50:#eedee0; --red-100:#e0c3c6; --red-200:#cd9da1; --red-300:#b9777e;
+    --red-400:#ac5e67; --red-500:#84444f; --red-600:#5d3037; --red-glow:#ad606b4d;
+    --magenta-300:#c793b7; --magenta-400:#c380a3; --magenta-500:#8a476b; --magenta-glow:#b26a934d;
+    --gold-300:#cdc39d; --gold-400:#b4a26e; --gold-500:#98814e; --gold-glow:#b4a26e4d;
+    --lime-300:#b3c288; --lime-400:#90a866; --lime-500:#5b743c; --lime-glow:#90a8664d;
+    --stat-strength:#c39a80; --stat-constitution:#c98a90; --stat-toughness:#c2b07b;
+    --stat-agility:#9fb875; --stat-technique:#78b4c0; --stat-luck:#c4a9d6;
+    --q-uncommon:#96afc9; --q-fine:#6aa6b2; --q-superior:#90a866; --q-exquisite:#93c79e;
+    --q-rare:#b4a26e; --q-epic:#c39a80; --q-mythic:#c380a3; --q-legendary:#cdc39d;
+    --q-divine:#5fb0bd; --q-cursed:#ad7cbe;
+    --border-glow:#519a9e4d;
+    --glow-cyan: 0 0 8px #519a9e33; --glow-red: 0 0 8px #ad606b33;
+    --glow-magenta: 0 0 8px #b26a9333; --glow-gold: 0 0 8px #b4a26e2e; --glow-lime: 0 0 8px #90a8662e;
+  `;
+
+  const EXTRA_DARK_CSS = `
+    html.${THEME_CLASS} { font-size: 125% !important; }
+    html.${THEME_CLASS} body { line-height: 1.6 !important; -webkit-font-smoothing: antialiased; }
+  `;
+
+  let enabled = localStorage.getItem(STORAGE_KEY) === "1";
+  let styleEl = null;
+
+  function css() {
+    return enabled ? `:root { ${DARK_LOWSAT_VARS} } ${EXTRA_DARK_CSS}` : "";
+  }
+
+  function applyStyle() {
+    if (!document.head) return;
+    if (!styleEl) {
+      styleEl = document.createElement("style");
+      styleEl.setAttribute(ATTR, "style");
+    }
+    styleEl.textContent = css();
+    // 每次都移到 head 末端，確保與其他主題共存時，同權重規則以本主題為準（後者勝）。
+    document.head.appendChild(styleEl);
+    document.documentElement.classList.toggle(THEME_CLASS, enabled);
+    console.info(`[GAO 低飽和] ${enabled ? "已套用" : "已關閉"}`);
+  }
+
+  function setEnabled(on) {
+    enabled = !!on;
+    localStorage.setItem(STORAGE_KEY, enabled ? "1" : "0");
+    applyStyle();
+    syncSelect();
+  }
+
+  // ---- 與既有「畫面風格」下拉選單相融 ----
+  // 併入一個 option；選到本項就套用、選到其他項就讓位給原生／其他擴充的主題。
+  function ensureOption(sel) {
+    if (!sel.querySelector(`option[value="${MY_VALUE}"]`)) {
+      const o = document.createElement("option");
+      o.value = MY_VALUE;
+      o.textContent = MY_LABEL;
+      o.setAttribute("data-gao-lowsat-option", "1");
+      sel.appendChild(o);
+    }
+  }
+
+  function syncSelect() {
+    const sel = document.querySelector(NATIVE_SELECT);
+    if (!sel) return;
+    ensureOption(sel);
+    if (enabled && sel.value !== MY_VALUE) sel.value = MY_VALUE;
+  }
+
+  function bindSelect() {
+    const sel = document.querySelector(NATIVE_SELECT);
+    if (!sel) return;
+    ensureOption(sel);
+    if (!sel.dataset.gaoLowsatBound) {
+      sel.dataset.gaoLowsatBound = "1";
+      // 用捕獲階段先讀值：選到本項就開；選到其他項就關（讓其他主題接手）。
+      sel.addEventListener("change", () => setEnabled(sel.value === MY_VALUE));
+    }
+    if (enabled) sel.value = MY_VALUE;
+  }
+
+  function boot() {
+    applyStyle();
+    bindSelect();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot, { once: true });
+  } else {
+    boot();
+  }
+
+  // 設定頁是 SPA、且下拉選單可能被重繪：用 observer 在它出現/重繪時補上 option 並同步選中值。
+  const mo = new MutationObserver(() => {
+    if (document.querySelector(NATIVE_SELECT)) bindSelect();
+  });
+  mo.observe(document.documentElement, { childList: true, subtree: true });
+
+  for (const key of ["pushState", "replaceState"]) {
+    const original = history[key];
+    history[key] = function (...args) {
+      const result = original.apply(this, args);
+      setTimeout(bindSelect, 60);
+      return result;
+    };
+  }
+  window.addEventListener("popstate", () => setTimeout(bindSelect, 60));
+
+  // Alt+2 開啟低飽和、Alt+1 關閉（回到原始／其他主題）
+  window.addEventListener("keydown", (e) => {
+    if (!e.altKey) return;
+    if (e.key === "2") setEnabled(true);
+    if (e.key === "1") setEnabled(false);
+  });
+})();
+
+/* ============================================================
+ * 模組 2／2：背包裝備分類 + 市場武器種類篩選
+ * 原始腳本：Gun Art Online 裝備分類 v1.1.0
+ * ============================================================ */
+(function () {
+  'use strict';
+
+  const FILTER_KEY = 'gao_cls_filters_v1';
+
+  // 品質色票 token → 中文（rarity）
+  const QUALITY_LABEL = {
+    poor: '劣質', common: '普通', uncommon: '非凡', fine: '精良', superior: '上等',
+    exquisite: '精緻', rare: '稀有', epic: '史詩', mythic: '神話', legendary: '傳說',
+    divine: '神聖', cursed: '詛咒'
+  };
+  const QUALITY_ORDER = ['poor', 'common', 'uncommon', 'fine', 'superior', 'exquisite', 'rare', 'epic', 'mythic', 'legendary', 'divine', 'cursed'];
+
+  // 種類 → 大分類
+  const CATEGORIES = [
+    { key: 'weapon', label: '武器', types: ['單手劍', '雙手劍', '太刀', '短刀', '細劍', '雙手斧', '弓', '手槍', '衝鋒槍', '輕機槍', '狙擊槍', '空手', '鎖鏈', '通用', '通用槍械'] },
+    { key: 'shield', label: '盾/副手', types: ['盾牌'] },
+    { key: 'armor', label: '防具', types: ['頭部', '身體', '手部', '腳部'] },
+    { key: 'accessory', label: '飾品', types: ['項鍊', '戒指', '耳環'] },
+    { key: 'other', label: '其他', types: ['未分類'] }
+  ];
+  function bigCategoryOf(type) {
+    for (const c of CATEGORIES) if (c.types.indexOf(type) !== -1) return c.key;
+    return 'other';
+  }
+
+  // 市場武器 tag(英) → 中文
+  const MARKET_WEAPON_LABEL = {
+    Katana: '太刀', Sword: '單手劍', Dagger: '短刀', Rapier: '細劍', Axe: '雙手斧',
+    GreatSword: '雙手劍', Bow: '弓', Pistol: '手槍', SMG: '衝鋒槍', LMG: '輕機槍',
+    Sniper: '狙擊槍', Shield: '盾牌'
+  };
+
+  // ---------- 樣式 ----------
+  const style = document.createElement('style');
+  style.textContent = [
+    '.gao-cls-bar { margin: 8px 0 12px; padding: 10px 12px; background: var(--bg-elevated,#20252e); border: 1px solid var(--border-soft,#8aa0b82e); border-radius: 6px; display: flex; flex-direction: column; gap: 8px; font-family: var(--font-mono,monospace); }',
+    '.gao-cls-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }',
+    '.gao-cls-title { font-size: 11px; font-weight: 700; letter-spacing: 1px; color: var(--cyan-300,#6aa6b2); }',
+    '.gao-cls-count { font-size: 11px; color: var(--text-muted,#868e9b); }',
+    '.gao-cls-group { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }',
+    '.gao-cls-glabel { font-size: 10px; color: var(--text-muted,#868e9b); letter-spacing: 1px; margin-right: 2px; min-width: 30px; }',
+    '.gao-cls-chip { font-family: inherit; font-size: 11px; padding: 3px 9px; border: 1px solid var(--border-strong,#566372); background: none; color: var(--text-secondary,#c3cad6); cursor: pointer; border-radius: 3px; line-height: 1.4; white-space: nowrap; transition: all .12s; }',
+    '.gao-cls-chip:hover { border-color: var(--cyan-400,#4c8a94); color: var(--text-primary,#eef1f6); }',
+    '.gao-cls-chip[data-active="true"] { background: rgba(0,203,240,.10); border-color: var(--cyan-400,#4c8a94); color: var(--cyan-200,#95c1c8); }',
+    '.gao-cls-chip.gao-cls-cat[data-active="true"] { background: rgba(0,203,240,.18); }',
+    '.gao-cls-chip small { color: var(--text-muted,#868e9b); margin-left: 4px; font-size: 10px; }',
+    '.gao-cls-chip[data-active="true"] small { color: var(--cyan-300,#6aa6b2); }',
+    '.gao-cls-reset { font-family: inherit; font-size: 11px; padding: 3px 9px; border: 1px solid var(--red-500,#84444f); background: none; color: var(--red-300,#b9777e); cursor: pointer; border-radius: 3px; }',
+    '.gao-cls-reset:hover { background: rgba(172,94,103,.12); }',
+    '.gao-cls-hidden-row { display: none !important; }',
+    // 市場
+    '.gao-cls-market { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin: 4px 0 2px; font-family: var(--font-mono,monospace); }'
+  ].join('\n');
+  document.head.appendChild(style);
+
+  // ---------- 篩選狀態（持久化） ----------
+  const defFilters = { types: [], quals: [], equipped: false, broken: false, worn: false, market: [] };
+  function loadFilters() {
+    try { return Object.assign({}, defFilters, JSON.parse(localStorage.getItem(FILTER_KEY) || '{}')); }
+    catch (e) { return Object.assign({}, defFilters); }
+  }
+  function saveFilters() { try { localStorage.setItem(FILTER_KEY, JSON.stringify(filters)); } catch (e) {} }
+  const filters = loadFilters();
+
+  // ---------- 背包裝備分類 ----------
+  function parseRow(row) {
+    const typeEl = row.querySelector('.gao-ext-inventory-row-type');
+    const nameEl = row.querySelector('.gao-ext-inventory-row-name');
+    const type = typeEl ? (typeEl.getAttribute('title') || typeEl.textContent).trim() : '未分類';
+    const name = nameEl ? nameEl.textContent.trim() : '';
+    const equipped = !!row.querySelector('.gao-ext-inventory-row-marker');
+    const qm = (row.getAttribute('style') || '').match(/--q-([a-z]+)/);
+    const quality = qm ? qm[1] : 'common';
+    const stats = row.querySelectorAll('.gao-ext-inventory-stat-value');
+    let broken = false, worn = false;
+    stats.forEach(function (s) { if (s.getAttribute('data-broken') === 'true') broken = true; });
+    const durEl = stats[stats.length - 1];
+    if (durEl) {
+      const m = durEl.textContent.replace(/,/g, '').match(/(\d+)\s*\/\s*(\d+)/);
+      if (m && parseInt(m[1], 10) < parseInt(m[2], 10)) worn = true;
+    }
+    return { type: type, name: name, equipped: equipped, quality: quality, broken: broken, worn: worn, el: row };
+  }
+
+  function rowMatches(r) {
+    if (filters.types.length && filters.types.indexOf(r.type) === -1) return false;
+    if (filters.quals.length && filters.quals.indexOf(r.quality) === -1) return false;
+    if (filters.equipped && !r.equipped) return false;
+    if (filters.broken && !r.broken) return false;
+    if (filters.worn && !r.worn) return false;
+    return true;
+  }
+
+  let lastSignature = '';
+  function ensureInventoryBar() {
+    // 資料一律讀自 UI Extension 的清單列（種類/品質/狀態最完整），清單在格狀模式下仍存在於 DOM
+    const list = document.querySelector('.gao-ext-inventory-list');
+    if (!list) { lastSignature = ''; return; }
+    const rows = Array.prototype.map.call(list.querySelectorAll('.gao-ext-inventory-row'), parseRow);
+    if (!rows.length) return;
+
+    // 格狀模式的格子：與清單列同順序，用索引配對，讓兩種檢視都能被篩選
+    const wrap = list.closest('.grid-wrap') || list.parentElement;
+    const gridCells = wrap ? Array.prototype.slice.call(wrap.querySelectorAll('.igrid .cell--filled')) : [];
+
+    // 出現的種類與品質（決定是否需重建工具列）
+    const typesPresent = [];
+    const qualsPresent = [];
+    const typeCount = {}, qualCount = {};
+    rows.forEach(function (r) {
+      if (typesPresent.indexOf(r.type) === -1) typesPresent.push(r.type);
+      if (qualsPresent.indexOf(r.quality) === -1) qualsPresent.push(r.quality);
+      typeCount[r.type] = (typeCount[r.type] || 0) + 1;
+      qualCount[r.quality] = (qualCount[r.quality] || 0) + 1;
+    });
+    const signature = typesPresent.slice().sort().join(',') + '|' + qualsPresent.slice().sort().join(',');
+
+    // 工具列固定放在裝備區標題（.grid-wrap__head）正下方，格狀/條列都看得到
+    const head = wrap ? wrap.querySelector('.grid-wrap__head') : null;
+    let bar = wrap ? wrap.querySelector('.gao-cls-bar') : document.querySelector('.gao-cls-bar');
+    const misplaced = bar && head && bar.previousElementSibling !== head;
+    if (!bar || misplaced || signature !== lastSignature) {
+      if (bar) bar.remove();
+      bar = buildInventoryBar(typesPresent, qualsPresent, typeCount, qualCount);
+      if (head && head.parentElement) head.parentElement.insertBefore(bar, head.nextSibling);
+      else list.parentElement.insertBefore(bar, list);
+      lastSignature = signature;
+    }
+    applyInventoryFilters(rows, gridCells, typeCount, qualCount);
+  }
+
+  function buildInventoryBar(typesPresent, qualsPresent) {
+    const bar = document.createElement('div');
+    bar.className = 'gao-cls-bar';
+    bar.innerHTML =
+      '<div class="gao-cls-head">' +
+        '<span class="gao-cls-title">裝備分類 · CLASSIFY</span>' +
+        '<span class="gao-cls-count" data-gao-cls-count></span>' +
+      '</div>';
+
+    // 種類列（依大分類排序）
+    const typeRow = document.createElement('div');
+    typeRow.className = 'gao-cls-group';
+    typeRow.innerHTML = '<span class="gao-cls-glabel">種類</span>';
+    // 大分類全選 chip
+    CATEGORIES.forEach(function (cat) {
+      const present = cat.types.filter(function (t) { return typesPresent.indexOf(t) !== -1; });
+      if (!present.length) return;
+      const chip = mkChip(cat.label, 'cat');
+      chip.classList.add('gao-cls-cat');
+      chip.dataset.gaoClsCat = cat.key;
+      chip.addEventListener('click', function () {
+        // 若該分類的種類都已選 → 取消，否則全選
+        const allOn = present.every(function (t) { return filters.types.indexOf(t) !== -1; });
+        present.forEach(function (t) {
+          const i = filters.types.indexOf(t);
+          if (allOn) { if (i !== -1) filters.types.splice(i, 1); }
+          else if (i === -1) filters.types.push(t);
+        });
+        saveFilters(); ensureInventoryBar();
+      });
+      typeRow.appendChild(chip);
+    });
+    // 各種類 chip
+    const orderedTypes = [];
+    CATEGORIES.forEach(function (c) { c.types.forEach(function (t) { if (typesPresent.indexOf(t) !== -1) orderedTypes.push(t); }); });
+    typesPresent.forEach(function (t) { if (orderedTypes.indexOf(t) === -1) orderedTypes.push(t); });
+    orderedTypes.forEach(function (t) {
+      const chip = mkChip(t, 'type');
+      chip.dataset.gaoClsType = t;
+      chip.addEventListener('click', function () { toggleIn(filters.types, t); saveFilters(); ensureInventoryBar(); });
+      typeRow.appendChild(chip);
+    });
+    bar.appendChild(typeRow);
+
+    // 品質列
+    const qualRow = document.createElement('div');
+    qualRow.className = 'gao-cls-group';
+    qualRow.innerHTML = '<span class="gao-cls-glabel">品質</span>';
+    QUALITY_ORDER.forEach(function (q) {
+      if (qualsPresent.indexOf(q) === -1) return;
+      const chip = mkChip(QUALITY_LABEL[q] || q, 'qual');
+      chip.dataset.gaoClsQual = q;
+      chip.style.color = 'var(--q-' + q + ', var(--text-secondary))';
+      chip.addEventListener('click', function () { toggleIn(filters.quals, q); saveFilters(); ensureInventoryBar(); });
+      qualRow.appendChild(chip);
+    });
+    bar.appendChild(qualRow);
+
+    // 狀態列
+    const stRow = document.createElement('div');
+    stRow.className = 'gao-cls-group';
+    stRow.innerHTML = '<span class="gao-cls-glabel">狀態</span>';
+    [['equipped', '已裝備'], ['worn', '未滿耐久'], ['broken', '破損']].forEach(function (pair) {
+      const chip = mkChip(pair[1], 'flag');
+      chip.dataset.gaoClsFlag = pair[0];
+      chip.addEventListener('click', function () { filters[pair[0]] = !filters[pair[0]]; saveFilters(); ensureInventoryBar(); });
+      stRow.appendChild(chip);
+    });
+    const reset = document.createElement('button');
+    reset.type = 'button';
+    reset.className = 'gao-cls-reset';
+    reset.textContent = '清除篩選';
+    reset.addEventListener('click', function () {
+      filters.types = []; filters.quals = []; filters.equipped = false; filters.broken = false; filters.worn = false;
+      saveFilters(); ensureInventoryBar();
+    });
+    stRow.appendChild(reset);
+    bar.appendChild(stRow);
+
+    return bar;
+  }
+
+  function applyInventoryFilters(rows, gridCells, typeCount, qualCount) {
+    let shown = 0;
+    rows.forEach(function (r, i) {
+      const ok = rowMatches(r);
+      r.el.classList.toggle('gao-cls-hidden-row', !ok);
+      // 同步套用到格狀模式對應的格子（同順序索引配對）
+      if (gridCells && gridCells[i]) gridCells[i].classList.toggle('gao-cls-hidden-row', !ok);
+      if (ok) shown++;
+    });
+    // 更新計數與 chip 狀態
+    const countEl = document.querySelector('[data-gao-cls-count]');
+    if (countEl) countEl.textContent = '顯示 ' + shown + ' / ' + rows.length + ' 件';
+    document.querySelectorAll('.gao-cls-chip[data-gao-cls-type]').forEach(function (chip) {
+      const t = chip.dataset.gaoClsType;
+      chip.dataset.active = filters.types.indexOf(t) !== -1 ? 'true' : 'false';
+      setChipCount(chip, typeCount[t] || 0);
+    });
+    document.querySelectorAll('.gao-cls-chip[data-gao-cls-cat]').forEach(function (chip) {
+      const cat = CATEGORIES.find(function (c) { return c.key === chip.dataset.gaoClsCat; });
+      const present = cat ? cat.types.filter(function (t) { return (typeCount[t] || 0) > 0; }) : [];
+      const allOn = present.length && present.every(function (t) { return filters.types.indexOf(t) !== -1; });
+      chip.dataset.active = allOn ? 'true' : 'false';
+    });
+    document.querySelectorAll('.gao-cls-chip[data-gao-cls-qual]').forEach(function (chip) {
+      const q = chip.dataset.gaoClsQual;
+      chip.dataset.active = filters.quals.indexOf(q) !== -1 ? 'true' : 'false';
+      setChipCount(chip, qualCount[q] || 0);
+    });
+    document.querySelectorAll('.gao-cls-chip[data-gao-cls-flag]').forEach(function (chip) {
+      chip.dataset.active = filters[chip.dataset.gaoClsFlag] ? 'true' : 'false';
+    });
+  }
+
+  // ---------- 市場武器種類篩選 ----------
+  function ensureMarketBar() {
+    if (location.pathname.indexOf('market') === -1) return;
+    const chips = document.querySelector('.market-main .chips');
+    const listings = document.querySelector('.market-main .listings');
+    if (!chips || !listings) return;
+
+    const rows = Array.prototype.map.call(listings.querySelectorAll('.listing'), function (el) {
+      const meta = el.querySelector('.listing__meta');
+      let tag = null;
+      if (meta) {
+        meta.querySelectorAll('span').forEach(function (sp) {
+          const t = sp.textContent.trim();
+          if (MARKET_WEAPON_LABEL[t]) tag = t;
+        });
+      }
+      return { el: el, tag: tag };
+    });
+    const present = [];
+    rows.forEach(function (r) { if (r.tag && present.indexOf(r.tag) === -1) present.push(r.tag); });
+
+    let bar = document.querySelector('.gao-cls-market');
+    if (!present.length) { if (bar) bar.remove(); return; }
+    const sig = present.slice().sort().join(',');
+    if (!bar || bar.dataset.sig !== sig) {
+      if (bar) bar.remove();
+      bar = document.createElement('div');
+      bar.className = 'gao-cls-market';
+      bar.dataset.sig = sig;
+      bar.innerHTML = '<span class="gao-cls-glabel">武器種類</span>';
+      present.sort();
+      present.forEach(function (tag) {
+        const chip = mkChip(MARKET_WEAPON_LABEL[tag], 'mkt');
+        chip.dataset.gaoClsMkt = tag;
+        chip.addEventListener('click', function () { toggleIn(filters.market, tag); saveFilters(); ensureMarketBar(); });
+        bar.appendChild(chip);
+      });
+      const reset = document.createElement('button');
+      reset.type = 'button';
+      reset.className = 'gao-cls-reset';
+      reset.textContent = '全部';
+      reset.addEventListener('click', function () { filters.market = []; saveFilters(); ensureMarketBar(); });
+      bar.appendChild(reset);
+      chips.parentElement.insertBefore(bar, chips.nextSibling);
+    }
+
+    // 套用：有選武器種類時，只顯示符合的武器listing（其餘隱藏）
+    const active = filters.market;
+    rows.forEach(function (r) {
+      const ok = !active.length || (r.tag && active.indexOf(r.tag) !== -1);
+      r.el.classList.toggle('gao-cls-hidden-row', !ok);
+    });
+    bar.querySelectorAll('.gao-cls-chip[data-gao-cls-mkt]').forEach(function (chip) {
+      chip.dataset.active = active.indexOf(chip.dataset.gaoClsMkt) !== -1 ? 'true' : 'false';
+    });
+  }
+
+  // ---------- 小工具 ----------
+  function mkChip(label, kind) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'gao-cls-chip';
+    b.dataset.active = 'false';
+    b.innerHTML = '<span class="gao-cls-chip-label"></span><small></small>';
+    b.querySelector('.gao-cls-chip-label').textContent = label;
+    return b;
+  }
+  function setChipCount(chip, n) {
+    const s = chip.querySelector('small');
+    if (s) s.textContent = n;
+  }
+  function toggleIn(arr, v) {
+    const i = arr.indexOf(v);
+    if (i === -1) arr.push(v); else arr.splice(i, 1);
+  }
+
+  // ---------- 主迴圈（SPA 換頁 / 清單重繪時持續維護） ----------
+  function tick() {
+    try { ensureInventoryBar(); } catch (e) { console.error('[GAO 裝備分類]', e); }
+    try { ensureMarketBar(); } catch (e) { console.error('[GAO 裝備分類]', e); }
+  }
+  setInterval(tick, 700);
+  tick();
+})();
