@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gun Art Online Eye-Care Theme
 // @namespace    gunart-eyecare
-// @version      1.0.0
+// @version      1.0.1
 // @description  Low-saturation dark eye-care theme (WCAG AA) for Gun Art Online. Standalone — no classifier.
 // @author       ArcGrove7
 // @match        https://gunartonline.pages.dev/*
