@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Gun Art Online 護眼＋物品分類
+// @name         Gun Art Online Eye-Care + Item Classifier
 // @namespace    gunart-lowsat-classify
-// @version      1.2.0
-// @description  低飽和護眼主題＋背包/市場依部位·類別分類、素材依屬性(攻/防/幸/重)分類
+// @version      1.3.0
+// @description  Low-saturation eye-care theme + inventory/market classification by slot & category, and material classification by attribute (ATK/DEF/LUK/WGT)
 // @author       ArcGrove
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-idle
@@ -10,9 +10,10 @@
 // ==/UserScript==
 
 /* Changelog
- * 1.2.0 - 素材(.inv-item-lr)依描述屬性(攻擊/防禦/幸運/重量)分類；背包/市場改為部位·類別雙軸；移除誤判的礦物假分類
- * 1.1.0 - 背包裝備分類 + 市場武器種類篩選
- * 1.0.0 - 低飽和護眼主題
+ * 1.3.0 - Full English localization of UI labels, comments and metadata (game item-type strings stay as their in-game text for DOM matching)
+ * 1.2.0 - Material (.inv-item-lr) classification by description attribute (attack/defense/luck/weight); inventory/market switched to slot + category axes; removed the mis-guessed "mineral" classification
+ * 1.1.0 - Inventory equipment classification + market weapon-type filter
+ * 1.0.0 - Low-saturation eye-care theme
  */
 
 (() => {
@@ -21,13 +22,13 @@
   const ATTR = "data-gao-theme";
   const STORAGE_KEY = "gao-lowsat-enabled";
   const THEME_CLASS = "gao-lowsat";
-  const MY_VALUE = "gao-lowsat";               // 掛進既有下拉選單的 option value
-  const MY_LABEL = "低飽和暗色（護眼 · WCAG AA）";
+  const MY_VALUE = "gao-lowsat";               // option value injected into the existing theme <select>
+  const MY_LABEL = "Low-Saturation Dark (Eye-Care · WCAG AA)";
   const NATIVE_SELECT = '[data-gao-ext="settings-theme-select"]';
 
-  // ---- 低飽和護眼 ----
-  // 低彩度但拉大「文字明度 vs 背景明度」差距。所有當文字用的色（text-*、q-*、stat-*）
-  // 在最亮背景 #20252e 上量測皆 ≥4.5:1；最低一項 4.65:1。
+  // ---- Low-saturation eye-care ----
+  // Low chroma but a wide "text lightness vs background lightness" gap. Every colour used as text
+  // (text-*, q-*, stat-*) measures >=4.5:1 on the brightest background #20252e; lowest is 4.65:1.
 
   const DARK_LOWSAT_VARS = `
     --bg-void:#12151a; --bg-deep:#181c22; --bg-panel:#181c22; --bg-elevated:#20252e;
@@ -72,10 +73,11 @@
       styleEl.setAttribute(ATTR, "style");
     }
     styleEl.textContent = css();
-    // 每次都移到 head 末端，確保與其他主題共存時，同權重規則以本主題為準（後者勝）。
+    // Always move to the end of <head> so that, when coexisting with other themes, equal-specificity
+    // rules resolve in favour of this theme (last one wins).
     document.head.appendChild(styleEl);
     document.documentElement.classList.toggle(THEME_CLASS, enabled);
-    console.info(`[GAO 低飽和] ${enabled ? "已套用" : "已關閉"}`);
+    console.info(`[GAO low-sat] ${enabled ? "applied" : "disabled"}`);
   }
 
   function setEnabled(on) {
@@ -85,8 +87,8 @@
     syncSelect();
   }
 
-  // ---- 與既有「畫面風格」下拉選單相融 ----
-  // 併入一個 option；選到本項就套用、選到其他項就讓位給原生／其他擴充的主題。
+  // ---- Integrate with the existing "theme" <select> ----
+  // Add one option; selecting it applies this theme, selecting anything else yields to the native / other themes.
   function ensureOption(sel) {
     if (!sel.querySelector(`option[value="${MY_VALUE}"]`)) {
       const o = document.createElement("option");
@@ -110,7 +112,7 @@
     ensureOption(sel);
     if (!sel.dataset.gaoLowsatBound) {
       sel.dataset.gaoLowsatBound = "1";
-      // 用捕獲階段先讀值：選到本項就開；選到其他項就關（讓其他主題接手）。
+      // Read the value on change: our option turns it on, any other option turns it off (let other themes take over).
       sel.addEventListener("change", () => setEnabled(sel.value === MY_VALUE));
     }
     if (enabled) sel.value = MY_VALUE;
@@ -127,7 +129,8 @@
     boot();
   }
 
-  // 設定頁是 SPA、且下拉選單可能被重繪：用 observer 在它出現/重繪時補上 option 並同步選中值。
+  // The settings page is an SPA and the <select> may be re-rendered: use an observer to re-add the
+  // option and re-sync the selected value whenever it appears / re-renders.
   const mo = new MutationObserver(() => {
     if (document.querySelector(NATIVE_SELECT)) bindSelect();
   });
@@ -143,7 +146,7 @@
   }
   window.addEventListener("popstate", () => setTimeout(bindSelect, 60));
 
-  // Alt+2 開啟低飽和、Alt+1 關閉（回到原始／其他主題）
+  // Alt+2 enables low-saturation, Alt+1 disables it (back to native / other themes)
   window.addEventListener("keydown", (e) => {
     if (!e.altKey) return;
     if (e.key === "2") setEnabled(true);
@@ -152,45 +155,59 @@
 })();
 
 /* ============================================================
- * 模組 2／2：背包裝備分類 + 市場武器種類篩選
- * 原始腳本：Gun Art Online 裝備分類 v1.1.0
+ * Module 2/2: inventory classification + market slot/category filter + material attribute filter
  * ============================================================ */
 (function () {
   'use strict';
 
   const FILTER_KEY = 'gao_cls_filters_v1';
 
-  // 品質色票 token → 中文（rarity）
+  // Quality colour token -> display label (rarity)
   const QUALITY_LABEL = {
-    poor: '劣質', common: '普通', uncommon: '非凡', fine: '精良', superior: '上等',
-    exquisite: '精緻', rare: '稀有', epic: '史詩', mythic: '神話', legendary: '傳說',
-    divine: '神聖', cursed: '詛咒'
+    poor: 'Poor', common: 'Common', uncommon: 'Uncommon', fine: 'Fine', superior: 'Superior',
+    exquisite: 'Exquisite', rare: 'Rare', epic: 'Epic', mythic: 'Mythic', legendary: 'Legendary',
+    divine: 'Divine', cursed: 'Cursed'
   };
   const QUALITY_ORDER = ['poor', 'common', 'uncommon', 'fine', 'superior', 'exquisite', 'rare', 'epic', 'mythic', 'legendary', 'divine', 'cursed'];
 
-  // 類別（大分類）→ 部位（具體種類）
-  // 「類別」= 上層分類（武器/盾/防具/飾品）；「部位」= 每一個具體 type（太刀/頭部/戒指…）
+  // Category (top-level) -> slots (concrete item types).
+  // NOTE: the `types` strings are the game's own Chinese item-type text; they are compared against the
+  // DOM verbatim, so they must NOT be translated. Only the human-facing `label` is localized.
   const CATEGORIES = [
-    { key: 'weapon', label: '武器', types: ['單手劍', '雙手劍', '太刀', '短刀', '細劍', '雙手斧', '弓', '手槍', '衝鋒槍', '輕機槍', '狙擊槍', '空手', '鎖鏈', '通用', '通用槍械'] },
-    { key: 'shield', label: '盾/副手', types: ['盾牌'] },
-    { key: 'armor', label: '防具', types: ['頭部', '身體', '手部', '腳部', '帽子', '衣服', '手套', '鞋子', '靴子'] },
-    { key: 'accessory', label: '飾品', types: ['項鍊', '戒指', '耳環', '護符'] },
-    { key: 'other', label: '其他', types: ['未分類'] }
+    { key: 'weapon', label: 'Weapon', types: ['單手劍', '雙手劍', '太刀', '短刀', '細劍', '雙手斧', '弓', '手槍', '衝鋒槍', '輕機槍', '狙擊槍', '空手', '鎖鏈', '通用', '通用槍械'] },
+    { key: 'shield', label: 'Shield/Off-hand', types: ['盾牌'] },
+    { key: 'armor', label: 'Armor', types: ['頭部', '身體', '手部', '腳部', '帽子', '衣服', '手套', '鞋子', '靴子'] },
+    { key: 'accessory', label: 'Accessory', types: ['項鍊', '戒指', '耳環', '護符'] },
+    { key: 'other', label: 'Other', types: ['未分類'] }
   ];
   function bigCategoryOf(type) {
     for (const c of CATEGORIES) if (c.types.indexOf(type) !== -1) return c.key;
     return 'other';
   }
-  // 所有已知部位（中文）—— 供市場以中文 type 直接比對
+  // All known slots (Chinese) -- lets the market match a Chinese type string directly.
   const KNOWN_TYPES = CATEGORIES.reduce(function (a, c) { return a.concat(c.types); }, []);
 
-  // 素材屬性：依素材「名稱＋描述」中出現的關鍵字分類（攻/防/幸/重）
-  // 遊戲描述用語多樣，故各屬性收錄常見同義詞（例：攻守/攻防＝攻擊+防禦；輕盈/沉重＝重量）
+  // English display labels for the game's Chinese item-type strings (chip captions only; data stays Chinese).
+  const TYPE_LABEL = {
+    '單手劍': 'One-Handed Sword', '雙手劍': 'Two-Handed Sword', '太刀': 'Katana', '短刀': 'Dagger',
+    '細劍': 'Rapier', '雙手斧': 'Greataxe', '弓': 'Bow', '手槍': 'Pistol', '衝鋒槍': 'SMG',
+    '輕機槍': 'LMG', '狙擊槍': 'Sniper', '空手': 'Unarmed', '鎖鏈': 'Chain', '通用': 'Universal',
+    '通用槍械': 'Firearm', '盾牌': 'Shield',
+    '頭部': 'Head', '身體': 'Body', '手部': 'Hands', '腳部': 'Feet', '帽子': 'Hat', '衣服': 'Clothing',
+    '手套': 'Gloves', '鞋子': 'Shoes', '靴子': 'Boots',
+    '項鍊': 'Necklace', '戒指': 'Ring', '耳環': 'Earring', '護符': 'Amulet',
+    '未分類': 'Unclassified'
+  };
+  function typeLabel(t) { return TYPE_LABEL[t] || t; }
+
+  // Material attributes: classify by keywords found in a material's "name + description" (ATK/DEF/LUK/WGT).
+  // In-game wording varies, so each attribute collects common synonyms
+  // (e.g. 攻守/攻防 = attack + defense; 輕盈/沉重 = weight). Keywords must stay as the Chinese text.
   const MAT_STATS = [
-    { key: 'attack',  label: '攻擊', kw: ['攻擊', '攻守', '攻防', '普攻'] },
-    { key: 'defense', label: '防禦', kw: ['防禦', '攻守', '攻防'] },
-    { key: 'luck',    label: '幸運', kw: ['幸運'] },
-    { key: 'weight',  label: '重量', kw: ['重量', '輕盈', '沉重', '份量', '分量', '質量', '密度', '負重'] }
+    { key: 'attack',  label: 'Attack',  kw: ['攻擊', '攻守', '攻防', '普攻'] },
+    { key: 'defense', label: 'Defense', kw: ['防禦', '攻守', '攻防'] },
+    { key: 'luck',    label: 'Luck',    kw: ['幸運'] },
+    { key: 'weight',  label: 'Weight',  kw: ['重量', '輕盈', '沉重', '份量', '分量', '質量', '密度', '負重'] }
   ];
   const MAT_STAT_ORDER = MAT_STATS.map(function (s) { return s.key; });
   const MAT_STAT_LABEL = MAT_STATS.reduce(function (a, s) { a[s.key] = s.label; return a; }, {});
@@ -203,20 +220,20 @@
     return out;
   }
 
-  // 市場物品 tag → 中文部位（英文 tag 與中文 type 皆可）
+  // Market listing tag -> Chinese slot (accepts both English tags and Chinese type strings).
   const MARKET_TAG_LABEL = {
-    // 武器
+    // weapons
     Katana: '太刀', Sword: '單手劍', Dagger: '短刀', Rapier: '細劍', Axe: '雙手斧',
     GreatSword: '雙手劍', Bow: '弓', Pistol: '手槍', SMG: '衝鋒槍', LMG: '輕機槍', Sniper: '狙擊槍',
-    // 盾/副手
+    // shield / off-hand
     Shield: '盾牌',
-    // 防具
+    // armor
     Helmet: '頭部', Head: '頭部', Body: '身體', Armor: '身體', Chest: '身體',
     Gloves: '手部', Hands: '手部', Boots: '腳部', Feet: '腳部', Shoes: '腳部',
-    // 飾品
+    // accessories
     Necklace: '項鍊', Amulet: '項鍊', Ring: '戒指', Earring: '耳環', Earrings: '耳環'
   };
-  // 把一段 tag 文字解析成中文部位；無法對應時回傳 null
+  // Resolve a tag string to a Chinese slot; returns null if it maps to nothing.
   function resolveMarketPart(text) {
     if (!text) return null;
     text = text.trim();
@@ -225,7 +242,7 @@
     return null;
   }
 
-  // ---------- 樣式 ----------
+  // ---------- Styles ----------
   const style = document.createElement('style');
   style.textContent = [
     '.gao-cls-bar { margin: 8px 0 12px; padding: 10px 12px; background: var(--bg-elevated,#20252e); border: 1px solid var(--border-soft,#8aa0b82e); border-radius: 6px; display: flex; flex-direction: column; gap: 8px; font-family: var(--font-mono,monospace); }',
@@ -243,16 +260,16 @@
     '.gao-cls-reset { font-family: inherit; font-size: 11px; padding: 3px 9px; border: 1px solid var(--red-500,#84444f); background: none; color: var(--red-300,#b9777e); cursor: pointer; border-radius: 3px; }',
     '.gao-cls-reset:hover { background: rgba(172,94,103,.12); }',
     '.gao-cls-hidden-row { display: none !important; }',
-    // 素材工具列（原生背包頁）
+    // material toolbar (native inventory page)
     '.gao-cls-matbar { margin: 0 0 var(--s-3,12px); }',
-    // 市場
+    // market
     '.gao-cls-market { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin: 4px 0 2px; font-family: var(--font-mono,monospace); }'
   ].join('\n');
   document.head.appendChild(style);
 
-  // ---------- 篩選狀態（持久化） ----------
-  // types = 背包部位（具體種類）；quals = 品質；market = 市場部位（中文）
-  // mat = 素材屬性（attack/defense/luck/weight/none）
+  // ---------- Filter state (persisted) ----------
+  // types = inventory slots (concrete item types); quals = quality; market = market slots (Chinese)
+  // mat = material attributes (attack/defense/luck/weight/none)
   const defFilters = { types: [], quals: [], mat: [], equipped: false, broken: false, worn: false, market: [] };
   function loadFilters() {
     try { return Object.assign({}, defFilters, JSON.parse(localStorage.getItem(FILTER_KEY) || '{}')); }
@@ -261,7 +278,7 @@
   function saveFilters() { try { localStorage.setItem(FILTER_KEY, JSON.stringify(filters)); } catch (e) {} }
   const filters = loadFilters();
 
-  // ---------- 背包裝備分類 ----------
+  // ---------- Inventory equipment classification ----------
   function parseRow(row) {
     const typeEl = row.querySelector('.gao-ext-inventory-row-type');
     const nameEl = row.querySelector('.gao-ext-inventory-row-name');
@@ -291,22 +308,22 @@
   }
 
   function ensureInventoryBar() {
-    // 頁面可能同時存在多個清單（裝備 / 礦物 / 素材…），逐一維護各自的工具列
+    // A page may hold several lists (equipment / materials / ...): maintain each one's toolbar.
     const lists = document.querySelectorAll('.gao-ext-inventory-list');
     if (!lists.length) return;
     Array.prototype.forEach.call(lists, ensureInventoryBarFor);
   }
 
   function ensureInventoryBarFor(list) {
-    // 資料一律讀自 UI Extension 的清單列（種類/品質/狀態最完整），清單在格狀模式下仍存在於 DOM
+    // Read from the UI-extension list rows (most complete type/quality/status); the list stays in the DOM even in grid view.
     const rows = Array.prototype.map.call(list.querySelectorAll('.gao-ext-inventory-row'), parseRow);
     if (!rows.length) return;
 
-    // 格狀模式的格子：與清單列同順序，用索引配對，讓兩種檢視都能被篩選
+    // Grid-view cells: same order as the list rows, paired by index so both views can be filtered.
     const wrap = list.closest('.grid-wrap') || list.parentElement;
     const gridCells = wrap ? Array.prototype.slice.call(wrap.querySelectorAll('.igrid .cell--filled')) : [];
 
-    // 出現的部位、品質（決定是否需重建工具列）
+    // Present slots and qualities (decide whether the toolbar needs rebuilding).
     const typesPresent = [];
     const qualsPresent = [];
     const typeCount = {}, qualCount = {};
@@ -318,7 +335,7 @@
     });
     const signature = typesPresent.slice().sort().join(',') + '|' + qualsPresent.slice().sort().join(',');
 
-    // 工具列固定放在該區標題（.grid-wrap__head）正下方，格狀/條列都看得到
+    // Keep the toolbar right under this section's header (.grid-wrap__head), visible in both grid and list views.
     const head = wrap ? wrap.querySelector('.grid-wrap__head') : null;
     let bar = wrap ? wrap.querySelector('.gao-cls-bar') : null;
     const misplaced = bar && head && bar.previousElementSibling !== head;
@@ -337,14 +354,14 @@
     bar.className = 'gao-cls-bar';
     bar.innerHTML =
       '<div class="gao-cls-head">' +
-        '<span class="gao-cls-title">裝備分類 · CLASSIFY</span>' +
+        '<span class="gao-cls-title">EQUIPMENT · CLASSIFY</span>' +
         '<span class="gao-cls-count" data-gao-cls-count></span>' +
       '</div>';
 
-    // 類別列（大分類：武器/盾/防具/飾品/礦物…）
+    // Category row (top-level: Weapon/Shield/Armor/Accessory/...)
     const catRow = document.createElement('div');
     catRow.className = 'gao-cls-group';
-    catRow.innerHTML = '<span class="gao-cls-glabel">類別</span>';
+    catRow.innerHTML = '<span class="gao-cls-glabel">Category</span>';
     CATEGORIES.forEach(function (cat) {
       const present = cat.types.filter(function (t) { return typesPresent.indexOf(t) !== -1; });
       if (!present.length) return;
@@ -352,7 +369,7 @@
       chip.classList.add('gao-cls-cat');
       chip.dataset.gaoClsCat = cat.key;
       chip.addEventListener('click', function () {
-        // 若該分類的部位都已選 → 取消，否則全選
+        // If every slot in this category is already selected -> clear them, otherwise select all.
         const allOn = present.every(function (t) { return filters.types.indexOf(t) !== -1; });
         present.forEach(function (t) {
           const i = filters.types.indexOf(t);
@@ -365,25 +382,25 @@
     });
     bar.appendChild(catRow);
 
-    // 部位列（具體種類，依類別排序）
+    // Slot row (concrete types, ordered by category)
     const partRow = document.createElement('div');
     partRow.className = 'gao-cls-group';
-    partRow.innerHTML = '<span class="gao-cls-glabel">部位</span>';
+    partRow.innerHTML = '<span class="gao-cls-glabel">Slot</span>';
     const orderedTypes = [];
     CATEGORIES.forEach(function (c) { c.types.forEach(function (t) { if (typesPresent.indexOf(t) !== -1) orderedTypes.push(t); }); });
     typesPresent.forEach(function (t) { if (orderedTypes.indexOf(t) === -1) orderedTypes.push(t); });
     orderedTypes.forEach(function (t) {
-      const chip = mkChip(t, 'type');
+      const chip = mkChip(typeLabel(t), 'type');
       chip.dataset.gaoClsType = t;
       chip.addEventListener('click', function () { toggleIn(filters.types, t); saveFilters(); ensureInventoryBar(); });
       partRow.appendChild(chip);
     });
     bar.appendChild(partRow);
 
-    // 品質列
+    // Quality row
     const qualRow = document.createElement('div');
     qualRow.className = 'gao-cls-group';
-    qualRow.innerHTML = '<span class="gao-cls-glabel">品質</span>';
+    qualRow.innerHTML = '<span class="gao-cls-glabel">Quality</span>';
     QUALITY_ORDER.forEach(function (q) {
       if (qualsPresent.indexOf(q) === -1) return;
       const chip = mkChip(QUALITY_LABEL[q] || q, 'qual');
@@ -394,11 +411,11 @@
     });
     bar.appendChild(qualRow);
 
-    // 狀態列
+    // Status row
     const stRow = document.createElement('div');
     stRow.className = 'gao-cls-group';
-    stRow.innerHTML = '<span class="gao-cls-glabel">狀態</span>';
-    [['equipped', '已裝備'], ['worn', '未滿耐久'], ['broken', '破損']].forEach(function (pair) {
+    stRow.innerHTML = '<span class="gao-cls-glabel">Status</span>';
+    [['equipped', 'Equipped'], ['worn', 'Worn'], ['broken', 'Broken']].forEach(function (pair) {
       const chip = mkChip(pair[1], 'flag');
       chip.dataset.gaoClsFlag = pair[0];
       chip.addEventListener('click', function () { filters[pair[0]] = !filters[pair[0]]; saveFilters(); ensureInventoryBar(); });
@@ -407,7 +424,7 @@
     const reset = document.createElement('button');
     reset.type = 'button';
     reset.className = 'gao-cls-reset';
-    reset.textContent = '清除篩選';
+    reset.textContent = 'Clear';
     reset.addEventListener('click', function () {
       filters.types = []; filters.quals = [];
       filters.equipped = false; filters.broken = false; filters.worn = false;
@@ -424,14 +441,14 @@
     rows.forEach(function (r, i) {
       const ok = rowMatches(r);
       r.el.classList.toggle('gao-cls-hidden-row', !ok);
-      // 同步套用到格狀模式對應的格子（同順序索引配對）
+      // Mirror onto the matching grid-view cell (paired by index in the same order).
       if (gridCells && gridCells[i]) gridCells[i].classList.toggle('gao-cls-hidden-row', !ok);
       if (ok) shown++;
     });
     if (!bar) return;
-    // 更新計數與 chip 狀態（僅作用於本工具列）
+    // Update the count and chip states (scoped to this toolbar).
     const countEl = bar.querySelector('[data-gao-cls-count]');
-    if (countEl) countEl.textContent = '顯示 ' + shown + ' / ' + rows.length + ' 件';
+    if (countEl) countEl.textContent = 'Showing ' + shown + ' / ' + rows.length;
     bar.querySelectorAll('.gao-cls-chip[data-gao-cls-type]').forEach(function (chip) {
       const t = chip.dataset.gaoClsType;
       chip.dataset.active = filters.types.indexOf(t) !== -1 ? 'true' : 'false';
@@ -453,21 +470,21 @@
     });
   }
 
-  // ---------- 市場部位／類別篩選 ----------
+  // ---------- Market slot / category filter ----------
   function ensureMarketBar() {
     if (location.pathname.indexOf('market') === -1) return;
     const chips = document.querySelector('.market-main .chips');
     const listings = document.querySelector('.market-main .listings');
     if (!chips || !listings) return;
 
-    // 每個 listing 解析出一個中文部位（英文 tag 或中文 type 皆可）
+    // Resolve each listing to a single Chinese slot (English tag or Chinese type both accepted).
     const rows = Array.prototype.map.call(listings.querySelectorAll('.listing'), function (el) {
       const meta = el.querySelector('.listing__meta') || el;
       let part = null;
       meta.querySelectorAll('span').forEach(function (sp) {
         if (!part) part = resolveMarketPart(sp.textContent);
       });
-      // 後備：整張 listing 的文字裡找已知部位
+      // Fallback: search the whole listing's title text for a known slot.
       if (!part) part = resolveMarketPart((el.getAttribute('title') || '').trim());
       return { el: el, part: part };
     });
@@ -477,11 +494,11 @@
     let bar = document.querySelector('.gao-cls-market');
     if (!present.length) { if (bar) bar.remove(); return; }
 
-    // 依類別排序部位
+    // Order slots by category
     const orderedParts = [];
     CATEGORIES.forEach(function (c) { c.types.forEach(function (t) { if (present.indexOf(t) !== -1) orderedParts.push(t); }); });
     present.forEach(function (t) { if (orderedParts.indexOf(t) === -1) orderedParts.push(t); });
-    // 出現的類別
+    // Present categories
     const catsPresent = CATEGORIES.filter(function (c) {
       return c.types.some(function (t) { return present.indexOf(t) !== -1; });
     });
@@ -493,10 +510,10 @@
       bar.className = 'gao-cls-market';
       bar.dataset.sig = sig;
 
-      // 類別列
+      // Category row
       const catLabel = document.createElement('span');
       catLabel.className = 'gao-cls-glabel';
-      catLabel.textContent = '類別';
+      catLabel.textContent = 'Category';
       bar.appendChild(catLabel);
       catsPresent.forEach(function (cat) {
         const partsIn = cat.types.filter(function (t) { return present.indexOf(t) !== -1; });
@@ -515,13 +532,13 @@
         bar.appendChild(chip);
       });
 
-      // 部位列
+      // Slot row
       const partLabel = document.createElement('span');
       partLabel.className = 'gao-cls-glabel';
-      partLabel.textContent = '部位';
+      partLabel.textContent = 'Slot';
       bar.appendChild(partLabel);
       orderedParts.forEach(function (part) {
-        const chip = mkChip(part, 'mkt');
+        const chip = mkChip(typeLabel(part), 'mkt');
         chip.dataset.gaoClsMkt = part;
         chip.addEventListener('click', function () { toggleIn(filters.market, part); saveFilters(); ensureMarketBar(); });
         bar.appendChild(chip);
@@ -530,13 +547,13 @@
       const reset = document.createElement('button');
       reset.type = 'button';
       reset.className = 'gao-cls-reset';
-      reset.textContent = '全部';
+      reset.textContent = 'All';
       reset.addEventListener('click', function () { filters.market = []; saveFilters(); ensureMarketBar(); });
       bar.appendChild(reset);
       chips.parentElement.insertBefore(bar, chips.nextSibling);
     }
 
-    // 套用：有選部位時，只顯示符合的 listing（其餘隱藏）
+    // Apply: when slots are selected, show only matching listings (hide the rest).
     const active = filters.market;
     rows.forEach(function (r) {
       const ok = !active.length || (r.part && active.indexOf(r.part) !== -1);
@@ -553,15 +570,15 @@
     });
   }
 
-  // ---------- 素材屬性分類（原生背包素材頁 .inv-item-lr） ----------
+  // ---------- Material attribute classification (native inventory materials page, .inv-item-lr) ----------
   function ensureMaterialBar() {
     const center = document.querySelector('.inv-center');
     let bar = document.querySelector('.gao-cls-matbar');
     const rowEls = center ? center.querySelectorAll('.inv-item-lr') : [];
     if (!center || !rowEls.length) { if (bar) bar.remove(); return; }
 
-    // 每列素材：.lr__name 內含名稱(<b>)與描述(<span>)。
-    // 直接取整塊文字比對關鍵字，避免名稱 <b> 內的顏色圓點 <span> 干擾描述選取。
+    // Each material row: .lr__name holds the name (<b>) and description (<span>).
+    // Read the whole block's text to match keywords, avoiding the coloured dot <span> inside the name <b>.
     const rows = Array.prototype.map.call(rowEls, function (el) {
       const nameWrap = el.querySelector('.lr__name');
       const text = nameWrap ? nameWrap.textContent : '';
@@ -575,7 +592,7 @@
       else noneCount++;
     });
     const statsPresent = MAT_STAT_ORDER.filter(function (s) { return statCount[s]; });
-    // 沒有任何可辨識屬性 → 此頁多半不是素材，隱藏工具列
+    // No recognizable attribute at all -> this page is probably not materials, hide the toolbar.
     if (!statsPresent.length) { if (bar) bar.remove(); return; }
 
     const sig = statsPresent.join(',') + (noneCount ? '|none' : '');
@@ -586,12 +603,12 @@
       bar.dataset.sig = sig;
       bar.innerHTML =
         '<div class="gao-cls-head">' +
-          '<span class="gao-cls-title">素材屬性 · MATERIALS</span>' +
+          '<span class="gao-cls-title">MATERIALS · CLASSIFY</span>' +
           '<span class="gao-cls-count" data-gao-cls-matcount></span>' +
         '</div>';
       const grp = document.createElement('div');
       grp.className = 'gao-cls-group';
-      grp.innerHTML = '<span class="gao-cls-glabel">屬性</span>';
+      grp.innerHTML = '<span class="gao-cls-glabel">Attribute</span>';
       statsPresent.forEach(function (s) {
         const chip = mkChip(MAT_STAT_LABEL[s], 'mat');
         chip.dataset.gaoClsMat = s;
@@ -599,7 +616,7 @@
         grp.appendChild(chip);
       });
       if (noneCount) {
-        const chip = mkChip('其他', 'mat');
+        const chip = mkChip('Other', 'mat');
         chip.dataset.gaoClsMat = 'none';
         chip.addEventListener('click', function () { toggleIn(filters.mat, 'none'); saveFilters(); ensureMaterialBar(); });
         grp.appendChild(chip);
@@ -607,18 +624,18 @@
       const reset = document.createElement('button');
       reset.type = 'button';
       reset.className = 'gao-cls-reset';
-      reset.textContent = '清除';
+      reset.textContent = 'Clear';
       reset.addEventListener('click', function () { filters.mat = []; saveFilters(); ensureMaterialBar(); });
       grp.appendChild(reset);
       bar.appendChild(grp);
 
-      // 插在分類/搜尋工具列（.toolbar）之後
+      // Insert after the category/search toolbar (.toolbar)
       const anchor = center.querySelector('.toolbar');
       if (anchor && anchor.parentElement) anchor.parentElement.insertBefore(bar, anchor.nextSibling);
       else center.insertBefore(bar, center.firstChild);
     }
 
-    // 套用篩選（多選為 OR；「其他」= 無任何屬性）
+    // Apply filter (multi-select is OR; "Other" = no attribute at all)
     const active = filters.mat;
     const wantNone = active.indexOf('none') !== -1;
     let shown = 0;
@@ -631,7 +648,7 @@
       if (ok) shown++;
     });
     const countEl = bar.querySelector('[data-gao-cls-matcount]');
-    if (countEl) countEl.textContent = '顯示 ' + shown + ' / ' + rows.length + ' 種';
+    if (countEl) countEl.textContent = 'Showing ' + shown + ' / ' + rows.length;
     bar.querySelectorAll('.gao-cls-chip[data-gao-cls-mat]').forEach(function (chip) {
       const s = chip.dataset.gaoClsMat;
       chip.dataset.active = active.indexOf(s) !== -1 ? 'true' : 'false';
@@ -639,7 +656,7 @@
     });
   }
 
-  // ---------- 小工具 ----------
+  // ---------- Helpers ----------
   function mkChip(label, kind) {
     const b = document.createElement('button');
     b.type = 'button';
@@ -658,11 +675,11 @@
     if (i === -1) arr.push(v); else arr.splice(i, 1);
   }
 
-  // ---------- 主迴圈（SPA 換頁 / 清單重繪時持續維護） ----------
+  // ---------- Main loop (keep maintaining as the SPA navigates / lists re-render) ----------
   function tick() {
-    try { ensureInventoryBar(); } catch (e) { console.error('[GAO 物品分類] inventory', e); }
-    try { ensureMaterialBar(); } catch (e) { console.error('[GAO 物品分類] material', e); }
-    try { ensureMarketBar(); } catch (e) { console.error('[GAO 物品分類] market', e); }
+    try { ensureInventoryBar(); } catch (e) { console.error('[GAO classify] inventory', e); }
+    try { ensureMaterialBar(); } catch (e) { console.error('[GAO classify] material', e); }
+    try { ensureMarketBar(); } catch (e) { console.error('[GAO classify] market', e); }
   }
   setInterval(tick, 700);
   tick();
