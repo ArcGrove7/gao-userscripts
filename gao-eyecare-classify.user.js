@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Gun Art Online Eye-Care + Item Classifier
 // @namespace    gunart-lowsat-classify
-// @version      3.0.0
-// @description  Low-saturation eye-care theme + API-driven item classifier (equipment by slot/category/quality read from /api/forge/equipment, materials by attribute, market by slot/category) with a market MAX-quantity button. No polling; event-driven only.
+// @version      2.0.0
+// @description  Low-saturation eye-care theme + standalone item classifier (equipment by slot/category, materials by attribute, market by slot/category). No dependency on other extensions.
 // @author       ArcGrove
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-start
@@ -10,14 +10,10 @@
 // ==/UserScript==
 
 /* Changelog
- * 3.0.0 - Classifier reworked to be API-driven and event-driven (mirrors the "Gun Art Online UI
- *         Extension" architecture). Equipment attributes now come from the game's /api/forge/equipment
- *         response (slot, weapon tags, quality via name_rolls.quality, durability, lock) instead of
- *         scraping cell title/style/classes. The setInterval polling loop is gone; refresh runs on
- *         route changes + a scoped, rAF-debounced MutationObserver. Quality labels are now the game's
- *         real names. Market gains a MAX-quantity button.
- * 2.0.0 - Standalone architecture: equipment classification reads the game's own data
- *         (React Fiber on native .igrid cells + /api/forge/equipment fetch).
+ * 2.0.0 - Standalone architecture: equipment classification now reads the game's own data
+ *         (React Fiber on native .igrid cells + /api/forge/equipment fetch) instead of scraping
+ *         the "Gun Art Online UI Extension" list. Works with or without that extension. Materials
+ *         bar is gated to the 素材 category. run-at document-start so the fetch hook installs early.
  * 1.3.1 - Classification UI labels back to Traditional Chinese (code comments & metadata stay English)
  * 1.3.0 - English localization of UI labels, comments and metadata
  * 1.2.0 - Material (.inv-item-lr) classification by description attribute; inventory/market slot + category axes
@@ -163,54 +159,28 @@
   });
 })();
 /* ============================================================
- * Module 2/2: API-driven item classifier
- * Equipment attributes are read from the game's own /api/forge/equipment response (captured via a
- * fetch hook, with a proactive call when the store is empty), keyed to grid cells by their React
- * Fiber key. No cell title/style/class scraping for data, and no polling: refresh is driven by
- * route changes plus a scoped, rAF-debounced MutationObserver. UI labels are Traditional Chinese.
+ * Module 2/2: standalone item classifier
+ * Independent of the "Gun Art Online UI Extension": equipment data is read from a
+ * structured source (the game's React state on each grid cell + the /api/forge/equipment
+ * fetch), not from another script's injected DOM. Materials and market are read from the
+ * game's own native DOM. UI labels are Traditional Chinese; comments are English.
  * ============================================================ */
 (function () {
   'use strict';
 
-  const FILTER_KEY = 'gao_cls_filters_v2';
-  const EQUIP_GRID_SELECTOR = '.inv-center .grid-wrap .igrid';
+  const FILTER_KEY = 'gao_cls_filters_v1';
 
   // ---------------------------------------------------------------------------
   // Static maps (game data -> Traditional Chinese)
   // ---------------------------------------------------------------------------
 
-  // Quality is derived from the crafted `name_rolls.quality` roll using the game's own quality
-  // table (same thresholds the game/forge uses), so labels match what the game shows.
-  const QUALITY_TABLE = [
-    { name: '傳說', min: 0.984, max: Infinity },
-    { name: '神話', min: 0.9648, max: 0.984 },
-    { name: '史詩', min: 0.932, max: 0.9648 },
-    { name: '完美', min: 0.8784, max: 0.932 },
-    { name: '頂級', min: 0.8024, max: 0.8784 },
-    { name: '精良', min: 0.7072, max: 0.8024 },
-    { name: '高級', min: 0.6, max: 0.7072 },
-    { name: '上等', min: 0.4928, max: 0.6 },
-    { name: '普通', min: 0.3976, max: 0.4928 },
-    { name: '次等', min: 0.3216, max: 0.3976 },
-    { name: '劣質', min: 0.268, max: 0.3216 },
-    { name: '破爛', min: 0.2344, max: 0.268 },
-    { name: '垃圾般', min: 0.216, max: 0.2344 },
-    { name: '屎一般', min: -Infinity, max: 0.216 }
-  ];
-  const QUALITY_ORDER = QUALITY_TABLE.map(function (q) { return q.name; });
-  const QUALITY_COLOR_BY_NAME = {
-    傳說: 'var(--q-legendary)', 神話: 'var(--q-mythic)', 史詩: 'var(--q-epic)',
-    完美: 'var(--q-rare)', 頂級: 'var(--q-rare)', 精良: 'var(--q-superior)',
-    高級: 'var(--q-fine)', 上等: 'var(--q-uncommon)', 普通: 'var(--q-common)',
-    次等: 'var(--q-poor)', 劣質: 'var(--q-trash)', 破爛: 'var(--q-trash)',
-    垃圾般: 'var(--q-shit)', 屎一般: 'var(--q-shit)'
+  // Quality colour token (the game's `--q-<token>`) -> display label.
+  const QUALITY_LABEL = {
+    poor: '劣質', common: '普通', uncommon: '非凡', fine: '精良', superior: '上等',
+    exquisite: '精緻', rare: '稀有', epic: '史詩', mythic: '神話', legendary: '傳說',
+    divine: '神聖', cursed: '詛咒', trash: '破爛', shit: '垃圾'
   };
-  function qualityNameOfRoll(roll) {
-    const r = Number(roll);
-    if (!Number.isFinite(r)) return null;
-    const row = QUALITY_TABLE.find(function (q) { return r > q.min && r <= q.max; });
-    return row ? row.name : null;
-  }
+  const QUALITY_ORDER = ['legendary', 'divine', 'mythic', 'epic', 'cursed', 'rare', 'exquisite', 'superior', 'fine', 'uncommon', 'common', 'poor', 'trash', 'shit'];
 
   // equipment_slot (English key from the API) -> Traditional Chinese slot label.
   const SLOT_LABEL_BY_KEY = {
@@ -224,7 +194,8 @@
     Sniper: '狙擊槍', Shield: '盾牌', BareHand: '空手', Universal: '通用', Gun: '通用槍械', Chain: '鎖鏈'
   };
 
-  // Category (top-level) -> slots. `types` are the Chinese labels above and act as classification keys.
+  // Category (top-level) -> slots. `types` are the Chinese labels produced above; they are the
+  // classification keys. Only `label` is a heading. Covers both weapon tags and equipment slots.
   const CATEGORIES = [
     { key: 'weapon', label: '武器', types: ['單手劍', '雙手劍', '太刀', '短刀', '細劍', '雙手斧', '弓', '手槍', '衝鋒槍', '輕機槍', '狙擊槍', '空手', '鎖鏈', '通用', '通用槍械', '主手'] },
     { key: 'shield', label: '盾/副手', types: ['盾牌', '副手'] },
@@ -232,6 +203,10 @@
     { key: 'accessory', label: '飾品', types: ['項鍊', '戒指', '耳環', '護符'] },
     { key: 'other', label: '其他', types: ['未分類'] }
   ];
+  function bigCategoryOf(type) {
+    for (const c of CATEGORIES) if (c.types.indexOf(type) !== -1) return c.key;
+    return 'other';
+  }
   const KNOWN_TYPES = CATEGORIES.reduce(function (a, c) { return a.concat(c.types); }, []);
 
   // Material attributes: classify by keywords in a material's name + description.
@@ -290,9 +265,7 @@
     '.gao-cls-reset:hover { background: rgba(172,94,103,.12); }',
     '.gao-cls-hidden-row { display: none !important; }',
     '.gao-cls-matbar { margin: 0 0 var(--s-3,12px); }',
-    '.gao-cls-market { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin: 4px 0 2px; font-family: var(--font-mono,monospace); }',
-    '.gao-cls-maxbtn { font-family: var(--font-mono,monospace); font-size: 10px; letter-spacing: 1px; width: 42px; height: 28px; border: 1px solid var(--cyan-400,#4c8a94); background: rgba(0,203,240,.08); color: var(--cyan-200,#95c1c8); cursor: pointer; }',
-    '.gao-cls-maxbtn:hover { background: rgba(0,203,240,.16); }'
+    '.gao-cls-market { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin: 4px 0 2px; font-family: var(--font-mono,monospace); }'
   ].join('\n');
   (document.head || document.documentElement).appendChild(style);
 
@@ -308,7 +281,7 @@
   const filters = loadFilters();
 
   // ---------------------------------------------------------------------------
-  // API data layer: equipment store fed by the game's own /api/forge/equipment
+  // Structured data layer: equipment store fed by the game's own API
   // ---------------------------------------------------------------------------
   const equipmentById = new Map();
 
@@ -316,21 +289,24 @@
     const n = Number(value);
     return (Number.isInteger(n) && n > 0) ? n : null;
   }
-  // Merge an /api/forge/equipment payload ({ equipment: [...] }) into the store.
+  function looksLikeEquip(o) {
+    return !!o && typeof o === 'object' &&
+      ('equipment_slot' in o || 'tags' in o || ('atk' in o && 'def' in o) || 'weapon_name' in o);
+  }
+  // Merge any payload that carries an equipment array (or is itself such an array).
   function ingestEquipment(payload) {
-    const list = payload && Array.isArray(payload.equipment) ? payload.equipment
-      : Array.isArray(payload) ? payload
+    const list = Array.isArray(payload) ? payload
+      : (payload && Array.isArray(payload.equipment)) ? payload.equipment
+      : (payload && payload.inventory && Array.isArray(payload.inventory.equipment)) ? payload.inventory.equipment
       : null;
-    if (!list) return false;
-    let changed = false;
+    if (!list) return;
     for (const item of list) {
       const id = normId(item && item.id);
-      if (id) { equipmentById.set(id, item); changed = true; }
+      if (id && looksLikeEquip(item)) equipmentById.set(id, item);
     }
-    return changed;
   }
 
-  // Hook fetch once to capture the equipment response the game itself requests.
+  // Hook fetch once to capture equipment-bearing responses (same source the game uses).
   function installFetchHook() {
     if (window.__gaoClsFetchHook) return;
     if (typeof window.fetch !== 'function') return;
@@ -341,12 +317,10 @@
       try {
         const info = arguments[0];
         const url = typeof info === 'string' ? info : (info && info.url) ? String(info.url) : '';
-        if (/\/api\/forge\/equipment\/?(\?|$)/i.test(url)) {
+        if (/\/(equipment|me|inventory)\/?(\?|$)/i.test(url)) {
           p.then(function (res) {
             if (!res || !res.ok) return;
-            res.clone().json().then(function (data) {
-              if (ingestEquipment(data)) scheduleMount();
-            }).catch(function () {});
+            res.clone().json().then(ingestEquipment).catch(function () {});
           }).catch(function () {});
         }
       } catch (e) {}
@@ -355,25 +329,30 @@
   }
   installFetchHook();
 
-  // Proactively call the API when the store is empty (e.g. store not yet warmed by the game).
-  let equipFetchInFlight = false;
-  function ensureEquipmentData() {
-    if (equipmentById.size || equipFetchInFlight || typeof window.fetch !== 'function') return;
-    equipFetchInFlight = true;
-    window.fetch('/api/forge/equipment', { credentials: 'same-origin' })
-      .then(function (res) { return res && res.ok ? res.json() : null; })
-      .then(function (data) { if (ingestEquipment(data)) scheduleMount(); })
-      .catch(function () {})
-      .then(function () { equipFetchInFlight = false; });
-  }
-
-  // Read the React Fiber attached to a DOM node, and its key (the grid cell's key is the item id).
-  function cellItemId(cell) {
+  // Read the React Fiber attached to a DOM node.
+  function getFiber(el) {
     try {
-      const key = Object.keys(cell).find(function (k) { return k.indexOf('__reactFiber$') === 0; });
-      const fiber = key ? cell[key] : null;
-      return fiber ? normId(fiber.key) : null;
+      const key = Object.keys(el).find(function (k) { return k.indexOf('__reactFiber$') === 0; });
+      return key ? el[key] : null;
     } catch (e) { return null; }
+  }
+  // Resolve a grid cell to its equipment object: prefer the item carried in React props,
+  // fall back to the fiber key + the API-fed store.
+  function readCellEquipment(cell) {
+    const fiber = getFiber(cell);
+    if (!fiber) return { id: null, eq: null };
+    const id = normId(fiber.key);
+    let f = fiber, hops = 0, eq = null;
+    while (f && hops < 8) {
+      const props = f.memoizedProps;
+      if (props) {
+        const cand = props.item || props.equipment || props.entry || (looksLikeEquip(props) ? props : null);
+        if (looksLikeEquip(cand)) { eq = cand; break; }
+      }
+      f = f.return; hops++;
+    }
+    if (!eq && id != null) eq = equipmentById.get(id) || null;
+    return { id: id, eq: eq };
   }
 
   // Equipment object -> Chinese slot/type. Weapon tags win (太刀/盾牌…); otherwise the slot.
@@ -387,14 +366,16 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Equipment classification over the native grid (.igrid) — data from the API store
+  // Equipment classification over the native grid (.igrid)
   // ---------------------------------------------------------------------------
   function parseCell(cell) {
-    const id = cellItemId(cell);
-    const eq = id != null ? equipmentById.get(id) : null;
-    const type = typeOfEquipment(eq) || '未分類';
-    const quality = eq ? qualityNameOfRoll(eq.name_rolls && eq.name_rolls.quality) : null;
+    const name = cell.getAttribute('title') || '';
+    const qm = (cell.getAttribute('style') || '').match(/--q:\s*var\(--q-([a-z]+)\)/);
+    const quality = qm ? qm[1] : null;
     const equipped = cell.classList.contains('cell--equipped');
+    const info = readCellEquipment(cell);
+    const eq = info.eq;
+    let type = typeOfEquipment(eq) || '未分類';
     let broken = false, worn = false, hasDur = false;
     if (eq) {
       const dur = Number(eq.durability);
@@ -405,7 +386,7 @@
         if (Number.isFinite(max) && dur < max) worn = true;
       }
     }
-    return { el: cell, type: type, quality: quality, equipped: equipped, broken: broken, worn: worn, hasDur: hasDur };
+    return { el: cell, name: name, type: type, quality: quality, equipped: equipped, broken: broken, worn: worn, hasDur: hasDur };
   }
 
   function rowMatches(r) {
@@ -418,7 +399,7 @@
   }
 
   function ensureEquipmentBar() {
-    const grids = document.querySelectorAll(EQUIP_GRID_SELECTOR);
+    const grids = document.querySelectorAll('.inv-center .grid-wrap .igrid');
     if (!grids.length) return;
     Array.prototype.forEach.call(grids, ensureEquipmentBarFor);
   }
@@ -430,10 +411,9 @@
     if (!cells.length) return;
     const rows = cells.map(parseCell);
 
+    // Coexistence bonus: if the UI Extension's list view is present (same wrapper, same order),
+    // pair its rows by index so filters affect that view too.
     const wrap = grid.closest('.grid-wrap') || grid.parentElement;
-
-    // Coexistence: if the UI Extension's list view (條列模式) is showing, pair its rows by index
-    // (same source order: direct filled cells) so the same filters hide/show them too.
     const extList = wrap ? wrap.querySelector('.gao-ext-inventory-list') : null;
     const extRows = extList ? Array.prototype.slice.call(extList.querySelectorAll('.gao-ext-inventory-row')) : [];
 
@@ -511,7 +491,7 @@
     });
     bar.appendChild(partRow);
 
-    // Quality (order known names first, then any unknowns)
+    // Quality (order known tokens first, then any unknowns)
     if (qualsPresent.length) {
       const qualRow = document.createElement('div');
       qualRow.className = 'gao-cls-group';
@@ -519,9 +499,9 @@
       const orderedQ = QUALITY_ORDER.filter(function (q) { return qualsPresent.indexOf(q) !== -1; });
       qualsPresent.forEach(function (q) { if (orderedQ.indexOf(q) === -1) orderedQ.push(q); });
       orderedQ.forEach(function (q) {
-        const chip = mkChip(q);
+        const chip = mkChip(QUALITY_LABEL[q] || q);
         chip.dataset.gaoClsQual = q;
-        chip.style.color = QUALITY_COLOR_BY_NAME[q] || 'var(--text-secondary)';
+        chip.style.color = 'var(--q-' + q + ', var(--text-secondary))';
         chip.addEventListener('click', function () { toggleIn(filters.quals, q); saveFilters(); ensureEquipmentBar(); });
         qualRow.appendChild(chip);
       });
@@ -681,9 +661,10 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Market slot / category filter + MAX-quantity button
+  // Market slot / category filter
   // ---------------------------------------------------------------------------
   function ensureMarketBar() {
+    if (location.pathname.indexOf('market') === -1) return;
     const chips = document.querySelector('.market-main .chips');
     const listings = document.querySelector('.market-main .listings');
     if (!chips || !listings) return;
@@ -774,36 +755,6 @@
     });
   }
 
-  // Set a React-controlled input's value so the framework picks up the change.
-  function setInputValue(input, value) {
-    const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
-    if (desc && desc.set) desc.set.call(input, value); else input.value = value;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-  }
-
-  // Add a MAX button to the market purchase panel that fills the quantity input with the
-  // remaining stock (剩餘庫存：N 件).
-  function ensureMarketMaxButton() {
-    const detail = document.querySelector('.detail');
-    if (!detail || detail.querySelector('[data-gao-cls-max]')) return;
-    const m = detail.textContent.match(/剩餘庫存：\s*(\d+)\s*件/);
-    const max = m ? Number(m[1]) : 0;
-    const input = detail.querySelector('input[inputmode="numeric"], input[type="text"]');
-    const plus = Array.prototype.find.call(detail.querySelectorAll('button'), function (b) {
-      return b.textContent.trim() === '+';
-    });
-    if (!max || !input || !plus) return;
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'gao-cls-maxbtn';
-    button.setAttribute('data-gao-cls-max', '1');
-    button.textContent = 'MAX';
-    button.title = '填入剩餘庫存數量 (' + max + ')';
-    button.addEventListener('click', function () { setInputValue(input, String(max)); });
-    plus.insertAdjacentElement('afterend', button);
-  }
-
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
@@ -826,93 +777,13 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Routing + scoped observer (event-driven; no polling)
+  // Main loop (keep maintaining as the SPA navigates / lists re-render)
   // ---------------------------------------------------------------------------
-  const DEFAULT_OBS = { childList: true, subtree: true };
-  const INV_OBS = { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'style'] };
-
-  let pageObserver = null;
-  let currentPath = '';
-  let queuedMount = false;
-  let queuedRefresh = false;
-
-  function findMainRoot() { return document.querySelector('main.page-main, main'); }
-
-  function refreshInventory() {
+  function tick() {
     try { ensureEquipmentBar(); } catch (e) { console.error('[GAO classify] equipment', e); }
     try { ensureMaterialBar(); } catch (e) { console.error('[GAO classify] material', e); }
-  }
-  function refreshMarket() {
     try { ensureMarketBar(); } catch (e) { console.error('[GAO classify] market', e); }
-    try { ensureMarketMaxButton(); } catch (e) { console.error('[GAO classify] market-max', e); }
   }
-
-  function disconnectObserver() {
-    if (pageObserver) pageObserver.disconnect();
-    pageObserver = null;
-  }
-
-  function mountObserved(root, refresh, opts) {
-    if (!root) { disconnectObserver(); setTimeout(scheduleMount, 80); return; }
-    refresh();
-    disconnectObserver();
-    pageObserver = new MutationObserver(function () { scheduleRefresh(refresh); });
-    pageObserver.observe(root, opts || DEFAULT_OBS);
-  }
-
-  function scheduleRefresh(refresh) {
-    const path = currentPath;
-    if (queuedRefresh) return;
-    queuedRefresh = true;
-    requestAnimationFrame(function () {
-      queuedRefresh = false;
-      if (location.pathname !== path) return;
-      refresh();
-    });
-  }
-
-  function scheduleMount() {
-    if (queuedMount) return;
-    queuedMount = true;
-    requestAnimationFrame(function () {
-      queuedMount = false;
-      mountForRoute();
-    });
-  }
-
-  function mountForRoute() {
-    const path = location.pathname;
-    if (currentPath !== path) { currentPath = path; disconnectObserver(); }
-    if (path.indexOf('/inventory') !== -1) {
-      ensureEquipmentData();
-      return mountObserved(findMainRoot(), refreshInventory, INV_OBS);
-    }
-    if (path.indexOf('/market') !== -1) {
-      return mountObserved(document.body, refreshMarket, DEFAULT_OBS);
-    }
-    disconnectObserver();
-  }
-
-  function hookRouteChanges() {
-    for (const key of ['pushState', 'replaceState']) {
-      const original = history[key];
-      history[key] = function () {
-        const result = original.apply(this, arguments);
-        setTimeout(scheduleMount, 80);
-        return result;
-      };
-    }
-    window.addEventListener('popstate', function () { setTimeout(scheduleMount, 80); });
-  }
-
-  function boot() {
-    hookRouteChanges();
-    mountForRoute();
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot, { once: true });
-  } else {
-    boot();
-  }
+  setInterval(tick, 700);
+  tick();
 })();
