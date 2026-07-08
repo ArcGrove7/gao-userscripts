@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gun Art Online Eye-Care + Item Classifier
 // @namespace    gunart-lowsat-classify
-// @version      1.3.0
+// @version      1.3.1
 // @description  Low-saturation eye-care theme + inventory/market classification by slot & category, and material classification by attribute (ATK/DEF/LUK/WGT)
 // @author       ArcGrove
 // @match        https://gunartonline.pages.dev/*
@@ -10,7 +10,8 @@
 // ==/UserScript==
 
 /* Changelog
- * 1.3.0 - Full English localization of UI labels, comments and metadata (game item-type strings stay as their in-game text for DOM matching)
+ * 1.3.1 - Classification UI labels back to Traditional Chinese (code comments & metadata stay English)
+ * 1.3.0 - English localization of UI labels, comments and metadata (game item-type strings stay as their in-game text for DOM matching)
  * 1.2.0 - Material (.inv-item-lr) classification by description attribute (attack/defense/luck/weight); inventory/market switched to slot + category axes; removed the mis-guessed "mineral" classification
  * 1.1.0 - Inventory equipment classification + market weapon-type filter
  * 1.0.0 - Low-saturation eye-care theme
@@ -162,23 +163,23 @@
 
   const FILTER_KEY = 'gao_cls_filters_v1';
 
-  // Quality colour token -> display label (rarity)
+  // Quality colour token -> display label (rarity). UI text is Traditional Chinese.
   const QUALITY_LABEL = {
-    poor: 'Poor', common: 'Common', uncommon: 'Uncommon', fine: 'Fine', superior: 'Superior',
-    exquisite: 'Exquisite', rare: 'Rare', epic: 'Epic', mythic: 'Mythic', legendary: 'Legendary',
-    divine: 'Divine', cursed: 'Cursed'
+    poor: '劣質', common: '普通', uncommon: '非凡', fine: '精良', superior: '上等',
+    exquisite: '精緻', rare: '稀有', epic: '史詩', mythic: '神話', legendary: '傳說',
+    divine: '神聖', cursed: '詛咒'
   };
   const QUALITY_ORDER = ['poor', 'common', 'uncommon', 'fine', 'superior', 'exquisite', 'rare', 'epic', 'mythic', 'legendary', 'divine', 'cursed'];
 
   // Category (top-level) -> slots (concrete item types).
-  // NOTE: the `types` strings are the game's own Chinese item-type text; they are compared against the
-  // DOM verbatim, so they must NOT be translated. Only the human-facing `label` is localized.
+  // NOTE: the `types` strings are the game's own item-type text; they are compared against the DOM verbatim.
+  // The human-facing `label` (and every UI string below) is Traditional Chinese to match the game.
   const CATEGORIES = [
-    { key: 'weapon', label: 'Weapon', types: ['單手劍', '雙手劍', '太刀', '短刀', '細劍', '雙手斧', '弓', '手槍', '衝鋒槍', '輕機槍', '狙擊槍', '空手', '鎖鏈', '通用', '通用槍械'] },
-    { key: 'shield', label: 'Shield/Off-hand', types: ['盾牌'] },
-    { key: 'armor', label: 'Armor', types: ['頭部', '身體', '手部', '腳部', '帽子', '衣服', '手套', '鞋子', '靴子'] },
-    { key: 'accessory', label: 'Accessory', types: ['項鍊', '戒指', '耳環', '護符'] },
-    { key: 'other', label: 'Other', types: ['未分類'] }
+    { key: 'weapon', label: '武器', types: ['單手劍', '雙手劍', '太刀', '短刀', '細劍', '雙手斧', '弓', '手槍', '衝鋒槍', '輕機槍', '狙擊槍', '空手', '鎖鏈', '通用', '通用槍械'] },
+    { key: 'shield', label: '盾/副手', types: ['盾牌'] },
+    { key: 'armor', label: '防具', types: ['頭部', '身體', '手部', '腳部', '帽子', '衣服', '手套', '鞋子', '靴子'] },
+    { key: 'accessory', label: '飾品', types: ['項鍊', '戒指', '耳環', '護符'] },
+    { key: 'other', label: '其他', types: ['未分類'] }
   ];
   function bigCategoryOf(type) {
     for (const c of CATEGORIES) if (c.types.indexOf(type) !== -1) return c.key;
@@ -187,27 +188,14 @@
   // All known slots (Chinese) -- lets the market match a Chinese type string directly.
   const KNOWN_TYPES = CATEGORIES.reduce(function (a, c) { return a.concat(c.types); }, []);
 
-  // English display labels for the game's Chinese item-type strings (chip captions only; data stays Chinese).
-  const TYPE_LABEL = {
-    '單手劍': 'One-Handed Sword', '雙手劍': 'Two-Handed Sword', '太刀': 'Katana', '短刀': 'Dagger',
-    '細劍': 'Rapier', '雙手斧': 'Greataxe', '弓': 'Bow', '手槍': 'Pistol', '衝鋒槍': 'SMG',
-    '輕機槍': 'LMG', '狙擊槍': 'Sniper', '空手': 'Unarmed', '鎖鏈': 'Chain', '通用': 'Universal',
-    '通用槍械': 'Firearm', '盾牌': 'Shield',
-    '頭部': 'Head', '身體': 'Body', '手部': 'Hands', '腳部': 'Feet', '帽子': 'Hat', '衣服': 'Clothing',
-    '手套': 'Gloves', '鞋子': 'Shoes', '靴子': 'Boots',
-    '項鍊': 'Necklace', '戒指': 'Ring', '耳環': 'Earring', '護符': 'Amulet',
-    '未分類': 'Unclassified'
-  };
-  function typeLabel(t) { return TYPE_LABEL[t] || t; }
-
   // Material attributes: classify by keywords found in a material's "name + description" (ATK/DEF/LUK/WGT).
   // In-game wording varies, so each attribute collects common synonyms
-  // (e.g. 攻守/攻防 = attack + defense; 輕盈/沉重 = weight). Keywords must stay as the Chinese text.
+  // (e.g. 攻守/攻防 = attack + defense; 輕盈/沉重 = weight). Keywords and labels are Chinese.
   const MAT_STATS = [
-    { key: 'attack',  label: 'Attack',  kw: ['攻擊', '攻守', '攻防', '普攻'] },
-    { key: 'defense', label: 'Defense', kw: ['防禦', '攻守', '攻防'] },
-    { key: 'luck',    label: 'Luck',    kw: ['幸運'] },
-    { key: 'weight',  label: 'Weight',  kw: ['重量', '輕盈', '沉重', '份量', '分量', '質量', '密度', '負重'] }
+    { key: 'attack',  label: '攻擊', kw: ['攻擊', '攻守', '攻防', '普攻'] },
+    { key: 'defense', label: '防禦', kw: ['防禦', '攻守', '攻防'] },
+    { key: 'luck',    label: '幸運', kw: ['幸運'] },
+    { key: 'weight',  label: '重量', kw: ['重量', '輕盈', '沉重', '份量', '分量', '質量', '密度', '負重'] }
   ];
   const MAT_STAT_ORDER = MAT_STATS.map(function (s) { return s.key; });
   const MAT_STAT_LABEL = MAT_STATS.reduce(function (a, s) { a[s.key] = s.label; return a; }, {});
@@ -354,14 +342,14 @@
     bar.className = 'gao-cls-bar';
     bar.innerHTML =
       '<div class="gao-cls-head">' +
-        '<span class="gao-cls-title">EQUIPMENT · CLASSIFY</span>' +
+        '<span class="gao-cls-title">裝備分類 · CLASSIFY</span>' +
         '<span class="gao-cls-count" data-gao-cls-count></span>' +
       '</div>';
 
-    // Category row (top-level: Weapon/Shield/Armor/Accessory/...)
+    // Category row (top-level: 武器/盾/防具/飾品/...)
     const catRow = document.createElement('div');
     catRow.className = 'gao-cls-group';
-    catRow.innerHTML = '<span class="gao-cls-glabel">Category</span>';
+    catRow.innerHTML = '<span class="gao-cls-glabel">類別</span>';
     CATEGORIES.forEach(function (cat) {
       const present = cat.types.filter(function (t) { return typesPresent.indexOf(t) !== -1; });
       if (!present.length) return;
@@ -385,12 +373,12 @@
     // Slot row (concrete types, ordered by category)
     const partRow = document.createElement('div');
     partRow.className = 'gao-cls-group';
-    partRow.innerHTML = '<span class="gao-cls-glabel">Slot</span>';
+    partRow.innerHTML = '<span class="gao-cls-glabel">部位</span>';
     const orderedTypes = [];
     CATEGORIES.forEach(function (c) { c.types.forEach(function (t) { if (typesPresent.indexOf(t) !== -1) orderedTypes.push(t); }); });
     typesPresent.forEach(function (t) { if (orderedTypes.indexOf(t) === -1) orderedTypes.push(t); });
     orderedTypes.forEach(function (t) {
-      const chip = mkChip(typeLabel(t), 'type');
+      const chip = mkChip(t, 'type');
       chip.dataset.gaoClsType = t;
       chip.addEventListener('click', function () { toggleIn(filters.types, t); saveFilters(); ensureInventoryBar(); });
       partRow.appendChild(chip);
@@ -400,7 +388,7 @@
     // Quality row
     const qualRow = document.createElement('div');
     qualRow.className = 'gao-cls-group';
-    qualRow.innerHTML = '<span class="gao-cls-glabel">Quality</span>';
+    qualRow.innerHTML = '<span class="gao-cls-glabel">品質</span>';
     QUALITY_ORDER.forEach(function (q) {
       if (qualsPresent.indexOf(q) === -1) return;
       const chip = mkChip(QUALITY_LABEL[q] || q, 'qual');
@@ -414,8 +402,8 @@
     // Status row
     const stRow = document.createElement('div');
     stRow.className = 'gao-cls-group';
-    stRow.innerHTML = '<span class="gao-cls-glabel">Status</span>';
-    [['equipped', 'Equipped'], ['worn', 'Worn'], ['broken', 'Broken']].forEach(function (pair) {
+    stRow.innerHTML = '<span class="gao-cls-glabel">狀態</span>';
+    [['equipped', '已裝備'], ['worn', '未滿耐久'], ['broken', '破損']].forEach(function (pair) {
       const chip = mkChip(pair[1], 'flag');
       chip.dataset.gaoClsFlag = pair[0];
       chip.addEventListener('click', function () { filters[pair[0]] = !filters[pair[0]]; saveFilters(); ensureInventoryBar(); });
@@ -424,7 +412,7 @@
     const reset = document.createElement('button');
     reset.type = 'button';
     reset.className = 'gao-cls-reset';
-    reset.textContent = 'Clear';
+    reset.textContent = '清除篩選';
     reset.addEventListener('click', function () {
       filters.types = []; filters.quals = [];
       filters.equipped = false; filters.broken = false; filters.worn = false;
@@ -448,7 +436,7 @@
     if (!bar) return;
     // Update the count and chip states (scoped to this toolbar).
     const countEl = bar.querySelector('[data-gao-cls-count]');
-    if (countEl) countEl.textContent = 'Showing ' + shown + ' / ' + rows.length;
+    if (countEl) countEl.textContent = '顯示 ' + shown + ' / ' + rows.length + ' 件';
     bar.querySelectorAll('.gao-cls-chip[data-gao-cls-type]').forEach(function (chip) {
       const t = chip.dataset.gaoClsType;
       chip.dataset.active = filters.types.indexOf(t) !== -1 ? 'true' : 'false';
@@ -513,7 +501,7 @@
       // Category row
       const catLabel = document.createElement('span');
       catLabel.className = 'gao-cls-glabel';
-      catLabel.textContent = 'Category';
+      catLabel.textContent = '類別';
       bar.appendChild(catLabel);
       catsPresent.forEach(function (cat) {
         const partsIn = cat.types.filter(function (t) { return present.indexOf(t) !== -1; });
@@ -535,10 +523,10 @@
       // Slot row
       const partLabel = document.createElement('span');
       partLabel.className = 'gao-cls-glabel';
-      partLabel.textContent = 'Slot';
+      partLabel.textContent = '部位';
       bar.appendChild(partLabel);
       orderedParts.forEach(function (part) {
-        const chip = mkChip(typeLabel(part), 'mkt');
+        const chip = mkChip(part, 'mkt');
         chip.dataset.gaoClsMkt = part;
         chip.addEventListener('click', function () { toggleIn(filters.market, part); saveFilters(); ensureMarketBar(); });
         bar.appendChild(chip);
@@ -547,7 +535,7 @@
       const reset = document.createElement('button');
       reset.type = 'button';
       reset.className = 'gao-cls-reset';
-      reset.textContent = 'All';
+      reset.textContent = '全部';
       reset.addEventListener('click', function () { filters.market = []; saveFilters(); ensureMarketBar(); });
       bar.appendChild(reset);
       chips.parentElement.insertBefore(bar, chips.nextSibling);
@@ -603,12 +591,12 @@
       bar.dataset.sig = sig;
       bar.innerHTML =
         '<div class="gao-cls-head">' +
-          '<span class="gao-cls-title">MATERIALS · CLASSIFY</span>' +
+          '<span class="gao-cls-title">素材屬性 · MATERIALS</span>' +
           '<span class="gao-cls-count" data-gao-cls-matcount></span>' +
         '</div>';
       const grp = document.createElement('div');
       grp.className = 'gao-cls-group';
-      grp.innerHTML = '<span class="gao-cls-glabel">Attribute</span>';
+      grp.innerHTML = '<span class="gao-cls-glabel">屬性</span>';
       statsPresent.forEach(function (s) {
         const chip = mkChip(MAT_STAT_LABEL[s], 'mat');
         chip.dataset.gaoClsMat = s;
@@ -616,7 +604,7 @@
         grp.appendChild(chip);
       });
       if (noneCount) {
-        const chip = mkChip('Other', 'mat');
+        const chip = mkChip('其他', 'mat');
         chip.dataset.gaoClsMat = 'none';
         chip.addEventListener('click', function () { toggleIn(filters.mat, 'none'); saveFilters(); ensureMaterialBar(); });
         grp.appendChild(chip);
@@ -624,7 +612,7 @@
       const reset = document.createElement('button');
       reset.type = 'button';
       reset.className = 'gao-cls-reset';
-      reset.textContent = 'Clear';
+      reset.textContent = '清除';
       reset.addEventListener('click', function () { filters.mat = []; saveFilters(); ensureMaterialBar(); });
       grp.appendChild(reset);
       bar.appendChild(grp);
@@ -648,7 +636,7 @@
       if (ok) shown++;
     });
     const countEl = bar.querySelector('[data-gao-cls-matcount]');
-    if (countEl) countEl.textContent = 'Showing ' + shown + ' / ' + rows.length;
+    if (countEl) countEl.textContent = '顯示 ' + shown + ' / ' + rows.length + ' 種';
     bar.querySelectorAll('.gao-cls-chip[data-gao-cls-mat]').forEach(function (chip) {
       const s = chip.dataset.gaoClsMat;
       chip.dataset.active = active.indexOf(s) !== -1 ? 'true' : 'false';
