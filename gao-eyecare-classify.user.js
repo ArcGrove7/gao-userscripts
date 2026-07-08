@@ -432,10 +432,11 @@
 
     const wrap = grid.closest('.grid-wrap') || grid.parentElement;
 
-    // Coexistence: if the UI Extension's list view (條列模式) is showing, pair its rows by index
-    // (same source order: direct filled cells) so the same filters hide/show them too.
+    // Coexistence: the UI Extension's list view (條列模式) rebuilds its rows on any cell className
+    // change, so a class we set on those rows is wiped instantly. Instead we hide by position via a
+    // stylesheet (below) which keeps applying to the rebuilt rows. Rows share the grid's source order
+    // (direct filled cells), so row index i maps to the (i+1)-th row button.
     const extList = wrap ? wrap.querySelector('.gao-ext-inventory-list') : null;
-    const extRows = extList ? Array.prototype.slice.call(extList.querySelectorAll('.gao-ext-inventory-row')) : [];
 
     const typesPresent = [], qualsPresent = [];
     const typeCount = {}, qualCount = {};
@@ -461,7 +462,23 @@
       else wrap.insertBefore(bar, grid);
       if (wrap) wrap.dataset.gaoClsSig = signature;
     }
-    applyEquipmentFilters(bar, rows, extRows, typeCount, qualCount);
+    applyEquipmentFilters(bar, rows, extList, typeCount, qualCount);
+  }
+
+  // Hide UI-Extension list rows by position (survives its re-renders). Rows are the only <button>
+  // children of the list, so the (i+1)-th such button is our row i.
+  function applyExtListHiding(extList, hiddenIdx) {
+    let st = document.getElementById('gao-cls-extlist-style');
+    if (!extList || !hiddenIdx.length) { if (st) st.textContent = ''; return; }
+    if (!st) {
+      st = document.createElement('style');
+      st.id = 'gao-cls-extlist-style';
+      (document.head || document.documentElement).appendChild(st);
+    }
+    const sel = hiddenIdx.map(function (i) {
+      return '.gao-ext-inventory-list > .gao-ext-inventory-row:nth-of-type(' + (i + 1) + ')';
+    }).join(',');
+    st.textContent = sel + ' { display: none !important; }';
   }
 
   function buildEquipmentBar(typesPresent, qualsPresent, anyDur) {
@@ -554,14 +571,15 @@
     return bar;
   }
 
-  function applyEquipmentFilters(bar, rows, extRows, typeCount, qualCount) {
+  function applyEquipmentFilters(bar, rows, extList, typeCount, qualCount) {
     let shown = 0;
+    const hiddenIdx = [];
     rows.forEach(function (r, i) {
       const ok = rowMatches(r);
       r.el.classList.toggle('gao-cls-hidden-row', !ok);
-      if (extRows && extRows[i]) extRows[i].classList.toggle('gao-cls-hidden-row', !ok);
-      if (ok) shown++;
+      if (ok) shown++; else hiddenIdx.push(i);
     });
+    applyExtListHiding(extList, hiddenIdx);
     if (!bar) return;
     const countEl = bar.querySelector('[data-gao-cls-count]');
     if (countEl) countEl.textContent = '顯示 ' + shown + ' / ' + rows.length + ' 件';
