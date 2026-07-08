@@ -161,25 +161,64 @@
   };
   const QUALITY_ORDER = ['poor', 'common', 'uncommon', 'fine', 'superior', 'exquisite', 'rare', 'epic', 'mythic', 'legendary', 'divine', 'cursed'];
 
-  // 種類 → 大分類
+  // 類別（大分類）→ 部位（具體種類）
+  // 「類別」= 上層分類（武器/盾/防具/飾品）；「部位」= 每一個具體 type（太刀/頭部/戒指…）
   const CATEGORIES = [
     { key: 'weapon', label: '武器', types: ['單手劍', '雙手劍', '太刀', '短刀', '細劍', '雙手斧', '弓', '手槍', '衝鋒槍', '輕機槍', '狙擊槍', '空手', '鎖鏈', '通用', '通用槍械'] },
     { key: 'shield', label: '盾/副手', types: ['盾牌'] },
-    { key: 'armor', label: '防具', types: ['頭部', '身體', '手部', '腳部'] },
-    { key: 'accessory', label: '飾品', types: ['項鍊', '戒指', '耳環'] },
+    { key: 'armor', label: '防具', types: ['頭部', '身體', '手部', '腳部', '帽子', '衣服', '手套', '鞋子', '靴子'] },
+    { key: 'accessory', label: '飾品', types: ['項鍊', '戒指', '耳環', '護符'] },
+    { key: 'mineral', label: '礦物', types: ['礦物', '礦石', '原礦', '寶石', '晶石'] },
+    { key: 'material', label: '素材', types: ['素材', '材料'] },
     { key: 'other', label: '其他', types: ['未分類'] }
   ];
   function bigCategoryOf(type) {
     for (const c of CATEGORIES) if (c.types.indexOf(type) !== -1) return c.key;
     return 'other';
   }
+  // 所有已知部位（中文）—— 供市場以中文 type 直接比對
+  const KNOWN_TYPES = CATEGORIES.reduce(function (a, c) { return a.concat(c.types); }, []);
+  const MINERAL_CATS = ['mineral', 'material'];
 
-  // 市場武器 tag(英) → 中文
-  const MARKET_WEAPON_LABEL = {
+  // 礦物屬性：依「描述／名稱」中出現的關鍵字分類
+  const MINERAL_STATS = [
+    { key: 'attack',  label: '攻擊', kw: ['攻擊', '攻擊力', '攻击'] },
+    { key: 'defense', label: '防禦', kw: ['防禦', '防禦力', '防御'] },
+    { key: 'luck',    label: '幸運', kw: ['幸運', '幸运'] },
+    { key: 'weight',  label: '重量', kw: ['重量', '負重', '负重'] }
+  ];
+  const MINERAL_STAT_ORDER = MINERAL_STATS.map(function (s) { return s.key; });
+  const MINERAL_STAT_LABEL = MINERAL_STATS.reduce(function (a, s) { a[s.key] = s.label; return a; }, {});
+  function mineralStatsOf(text) {
+    if (!text) return [];
+    const out = [];
+    MINERAL_STATS.forEach(function (s) {
+      if (s.kw.some(function (k) { return text.indexOf(k) !== -1; })) out.push(s.key);
+    });
+    return out;
+  }
+
+  // 市場物品 tag → 中文部位（英文 tag 與中文 type 皆可）
+  const MARKET_TAG_LABEL = {
+    // 武器
     Katana: '太刀', Sword: '單手劍', Dagger: '短刀', Rapier: '細劍', Axe: '雙手斧',
-    GreatSword: '雙手劍', Bow: '弓', Pistol: '手槍', SMG: '衝鋒槍', LMG: '輕機槍',
-    Sniper: '狙擊槍', Shield: '盾牌'
+    GreatSword: '雙手劍', Bow: '弓', Pistol: '手槍', SMG: '衝鋒槍', LMG: '輕機槍', Sniper: '狙擊槍',
+    // 盾/副手
+    Shield: '盾牌',
+    // 防具
+    Helmet: '頭部', Head: '頭部', Body: '身體', Armor: '身體', Chest: '身體',
+    Gloves: '手部', Hands: '手部', Boots: '腳部', Feet: '腳部', Shoes: '腳部',
+    // 飾品
+    Necklace: '項鍊', Amulet: '項鍊', Ring: '戒指', Earring: '耳環', Earrings: '耳環'
   };
+  // 把一段 tag 文字解析成中文部位；無法對應時回傳 null
+  function resolveMarketPart(text) {
+    if (!text) return null;
+    text = text.trim();
+    if (MARKET_TAG_LABEL[text]) return MARKET_TAG_LABEL[text];
+    if (KNOWN_TYPES.indexOf(text) !== -1) return text;
+    return null;
+  }
 
   // ---------- 樣式 ----------
   const style = document.createElement('style');
@@ -205,7 +244,9 @@
   document.head.appendChild(style);
 
   // ---------- 篩選狀態（持久化） ----------
-  const defFilters = { types: [], quals: [], equipped: false, broken: false, worn: false, market: [] };
+  // types = 部位（具體種類）；minerals = 礦物屬性（attack/defense/luck/weight）
+  // market = 市場部位（中文）
+  const defFilters = { types: [], quals: [], minerals: [], equipped: false, broken: false, worn: false, market: [] };
   function loadFilters() {
     try { return Object.assign({}, defFilters, JSON.parse(localStorage.getItem(FILTER_KEY) || '{}')); }
     catch (e) { return Object.assign({}, defFilters); }
@@ -230,23 +271,45 @@
       const m = durEl.textContent.replace(/,/g, '').match(/(\d+)\s*\/\s*(\d+)/);
       if (m && parseInt(m[1], 10) < parseInt(m[2], 10)) worn = true;
     }
-    return { type: type, name: name, equipped: equipped, quality: quality, broken: broken, worn: worn, el: row };
+    const cat = bigCategoryOf(type);
+    // 礦物／素材：從名稱＋描述（title 與整列文字）抓 攻擊/防禦/幸運/重量 關鍵字
+    const isMineral = MINERAL_CATS.indexOf(cat) !== -1;
+    let mineralStats = [];
+    if (isMineral) {
+      const descEl = row.querySelector('.gao-ext-inventory-row-desc, .gao-ext-inventory-row-sub, [class*="desc"]');
+      const desc = descEl ? descEl.textContent : '';
+      const text = name + ' ' + (row.getAttribute('title') || '') + ' ' + desc + ' ' + row.textContent;
+      mineralStats = mineralStatsOf(text);
+    }
+    return {
+      type: type, name: name, category: cat, equipped: equipped, quality: quality,
+      broken: broken, worn: worn, isMineral: isMineral, mineralStats: mineralStats, el: row
+    };
   }
 
   function rowMatches(r) {
     if (filters.types.length && filters.types.indexOf(r.type) === -1) return false;
     if (filters.quals.length && filters.quals.indexOf(r.quality) === -1) return false;
+    // 礦物屬性：只作用於礦物/素材，且需含任一被選中的屬性
+    if (filters.minerals.length) {
+      if (!r.isMineral) return false;
+      if (!r.mineralStats.some(function (s) { return filters.minerals.indexOf(s) !== -1; })) return false;
+    }
     if (filters.equipped && !r.equipped) return false;
     if (filters.broken && !r.broken) return false;
     if (filters.worn && !r.worn) return false;
     return true;
   }
 
-  let lastSignature = '';
   function ensureInventoryBar() {
+    // 頁面可能同時存在多個清單（裝備 / 礦物 / 素材…），逐一維護各自的工具列
+    const lists = document.querySelectorAll('.gao-ext-inventory-list');
+    if (!lists.length) return;
+    Array.prototype.forEach.call(lists, ensureInventoryBarFor);
+  }
+
+  function ensureInventoryBarFor(list) {
     // 資料一律讀自 UI Extension 的清單列（種類/品質/狀態最完整），清單在格狀模式下仍存在於 DOM
-    const list = document.querySelector('.gao-ext-inventory-list');
-    if (!list) { lastSignature = ''; return; }
     const rows = Array.prototype.map.call(list.querySelectorAll('.gao-ext-inventory-row'), parseRow);
     if (!rows.length) return;
 
@@ -254,33 +317,39 @@
     const wrap = list.closest('.grid-wrap') || list.parentElement;
     const gridCells = wrap ? Array.prototype.slice.call(wrap.querySelectorAll('.igrid .cell--filled')) : [];
 
-    // 出現的種類與品質（決定是否需重建工具列）
+    // 出現的部位、品質、礦物屬性（決定是否需重建工具列）
     const typesPresent = [];
     const qualsPresent = [];
-    const typeCount = {}, qualCount = {};
+    const mineralsPresent = [];
+    const typeCount = {}, qualCount = {}, mineralCount = {};
     rows.forEach(function (r) {
       if (typesPresent.indexOf(r.type) === -1) typesPresent.push(r.type);
       if (qualsPresent.indexOf(r.quality) === -1) qualsPresent.push(r.quality);
       typeCount[r.type] = (typeCount[r.type] || 0) + 1;
       qualCount[r.quality] = (qualCount[r.quality] || 0) + 1;
+      r.mineralStats.forEach(function (s) {
+        if (mineralsPresent.indexOf(s) === -1) mineralsPresent.push(s);
+        mineralCount[s] = (mineralCount[s] || 0) + 1;
+      });
     });
-    const signature = typesPresent.slice().sort().join(',') + '|' + qualsPresent.slice().sort().join(',');
+    const signature = typesPresent.slice().sort().join(',') + '|' +
+      qualsPresent.slice().sort().join(',') + '|' + mineralsPresent.slice().sort().join(',');
 
-    // 工具列固定放在裝備區標題（.grid-wrap__head）正下方，格狀/條列都看得到
+    // 工具列固定放在該區標題（.grid-wrap__head）正下方，格狀/條列都看得到
     const head = wrap ? wrap.querySelector('.grid-wrap__head') : null;
-    let bar = wrap ? wrap.querySelector('.gao-cls-bar') : document.querySelector('.gao-cls-bar');
+    let bar = wrap ? wrap.querySelector('.gao-cls-bar') : null;
     const misplaced = bar && head && bar.previousElementSibling !== head;
-    if (!bar || misplaced || signature !== lastSignature) {
+    if (!bar || misplaced || (wrap && wrap.dataset.gaoClsSig !== signature)) {
       if (bar) bar.remove();
-      bar = buildInventoryBar(typesPresent, qualsPresent, typeCount, qualCount);
+      bar = buildInventoryBar(typesPresent, qualsPresent, mineralsPresent);
       if (head && head.parentElement) head.parentElement.insertBefore(bar, head.nextSibling);
       else list.parentElement.insertBefore(bar, list);
-      lastSignature = signature;
+      if (wrap) wrap.dataset.gaoClsSig = signature;
     }
-    applyInventoryFilters(rows, gridCells, typeCount, qualCount);
+    applyInventoryFilters(bar, rows, gridCells, typeCount, qualCount, mineralCount);
   }
 
-  function buildInventoryBar(typesPresent, qualsPresent) {
+  function buildInventoryBar(typesPresent, qualsPresent, mineralsPresent) {
     const bar = document.createElement('div');
     bar.className = 'gao-cls-bar';
     bar.innerHTML =
@@ -289,11 +358,10 @@
         '<span class="gao-cls-count" data-gao-cls-count></span>' +
       '</div>';
 
-    // 種類列（依大分類排序）
-    const typeRow = document.createElement('div');
-    typeRow.className = 'gao-cls-group';
-    typeRow.innerHTML = '<span class="gao-cls-glabel">種類</span>';
-    // 大分類全選 chip
+    // 類別列（大分類：武器/盾/防具/飾品/礦物…）
+    const catRow = document.createElement('div');
+    catRow.className = 'gao-cls-group';
+    catRow.innerHTML = '<span class="gao-cls-glabel">類別</span>';
     CATEGORIES.forEach(function (cat) {
       const present = cat.types.filter(function (t) { return typesPresent.indexOf(t) !== -1; });
       if (!present.length) return;
@@ -301,7 +369,7 @@
       chip.classList.add('gao-cls-cat');
       chip.dataset.gaoClsCat = cat.key;
       chip.addEventListener('click', function () {
-        // 若該分類的種類都已選 → 取消，否則全選
+        // 若該分類的部位都已選 → 取消，否則全選
         const allOn = present.every(function (t) { return filters.types.indexOf(t) !== -1; });
         present.forEach(function (t) {
           const i = filters.types.indexOf(t);
@@ -310,9 +378,14 @@
         });
         saveFilters(); ensureInventoryBar();
       });
-      typeRow.appendChild(chip);
+      catRow.appendChild(chip);
     });
-    // 各種類 chip
+    bar.appendChild(catRow);
+
+    // 部位列（具體種類，依類別排序）
+    const partRow = document.createElement('div');
+    partRow.className = 'gao-cls-group';
+    partRow.innerHTML = '<span class="gao-cls-glabel">部位</span>';
     const orderedTypes = [];
     CATEGORIES.forEach(function (c) { c.types.forEach(function (t) { if (typesPresent.indexOf(t) !== -1) orderedTypes.push(t); }); });
     typesPresent.forEach(function (t) { if (orderedTypes.indexOf(t) === -1) orderedTypes.push(t); });
@@ -320,9 +393,24 @@
       const chip = mkChip(t, 'type');
       chip.dataset.gaoClsType = t;
       chip.addEventListener('click', function () { toggleIn(filters.types, t); saveFilters(); ensureInventoryBar(); });
-      typeRow.appendChild(chip);
+      partRow.appendChild(chip);
     });
-    bar.appendChild(typeRow);
+    bar.appendChild(partRow);
+
+    // 礦物屬性列（僅在有礦物/素材時出現）
+    if (mineralsPresent && mineralsPresent.length) {
+      const mnRow = document.createElement('div');
+      mnRow.className = 'gao-cls-group';
+      mnRow.innerHTML = '<span class="gao-cls-glabel">礦物</span>';
+      MINERAL_STAT_ORDER.forEach(function (s) {
+        if (mineralsPresent.indexOf(s) === -1) return;
+        const chip = mkChip(MINERAL_STAT_LABEL[s], 'mineral');
+        chip.dataset.gaoClsMineral = s;
+        chip.addEventListener('click', function () { toggleIn(filters.minerals, s); saveFilters(); ensureInventoryBar(); });
+        mnRow.appendChild(chip);
+      });
+      bar.appendChild(mnRow);
+    }
 
     // 品質列
     const qualRow = document.createElement('div');
@@ -353,7 +441,8 @@
     reset.className = 'gao-cls-reset';
     reset.textContent = '清除篩選';
     reset.addEventListener('click', function () {
-      filters.types = []; filters.quals = []; filters.equipped = false; filters.broken = false; filters.worn = false;
+      filters.types = []; filters.quals = []; filters.minerals = [];
+      filters.equipped = false; filters.broken = false; filters.worn = false;
       saveFilters(); ensureInventoryBar();
     });
     stRow.appendChild(reset);
@@ -362,7 +451,7 @@
     return bar;
   }
 
-  function applyInventoryFilters(rows, gridCells, typeCount, qualCount) {
+  function applyInventoryFilters(bar, rows, gridCells, typeCount, qualCount, mineralCount) {
     let shown = 0;
     rows.forEach(function (r, i) {
       const ok = rowMatches(r);
@@ -371,67 +460,110 @@
       if (gridCells && gridCells[i]) gridCells[i].classList.toggle('gao-cls-hidden-row', !ok);
       if (ok) shown++;
     });
-    // 更新計數與 chip 狀態
-    const countEl = document.querySelector('[data-gao-cls-count]');
+    if (!bar) return;
+    // 更新計數與 chip 狀態（僅作用於本工具列）
+    const countEl = bar.querySelector('[data-gao-cls-count]');
     if (countEl) countEl.textContent = '顯示 ' + shown + ' / ' + rows.length + ' 件';
-    document.querySelectorAll('.gao-cls-chip[data-gao-cls-type]').forEach(function (chip) {
+    bar.querySelectorAll('.gao-cls-chip[data-gao-cls-type]').forEach(function (chip) {
       const t = chip.dataset.gaoClsType;
       chip.dataset.active = filters.types.indexOf(t) !== -1 ? 'true' : 'false';
       setChipCount(chip, typeCount[t] || 0);
     });
-    document.querySelectorAll('.gao-cls-chip[data-gao-cls-cat]').forEach(function (chip) {
+    bar.querySelectorAll('.gao-cls-chip[data-gao-cls-cat]').forEach(function (chip) {
       const cat = CATEGORIES.find(function (c) { return c.key === chip.dataset.gaoClsCat; });
       const present = cat ? cat.types.filter(function (t) { return (typeCount[t] || 0) > 0; }) : [];
       const allOn = present.length && present.every(function (t) { return filters.types.indexOf(t) !== -1; });
       chip.dataset.active = allOn ? 'true' : 'false';
     });
-    document.querySelectorAll('.gao-cls-chip[data-gao-cls-qual]').forEach(function (chip) {
+    bar.querySelectorAll('.gao-cls-chip[data-gao-cls-mineral]').forEach(function (chip) {
+      const s = chip.dataset.gaoClsMineral;
+      chip.dataset.active = filters.minerals.indexOf(s) !== -1 ? 'true' : 'false';
+      setChipCount(chip, mineralCount[s] || 0);
+    });
+    bar.querySelectorAll('.gao-cls-chip[data-gao-cls-qual]').forEach(function (chip) {
       const q = chip.dataset.gaoClsQual;
       chip.dataset.active = filters.quals.indexOf(q) !== -1 ? 'true' : 'false';
       setChipCount(chip, qualCount[q] || 0);
     });
-    document.querySelectorAll('.gao-cls-chip[data-gao-cls-flag]').forEach(function (chip) {
+    bar.querySelectorAll('.gao-cls-chip[data-gao-cls-flag]').forEach(function (chip) {
       chip.dataset.active = filters[chip.dataset.gaoClsFlag] ? 'true' : 'false';
     });
   }
 
-  // ---------- 市場武器種類篩選 ----------
+  // ---------- 市場部位／類別篩選 ----------
   function ensureMarketBar() {
     if (location.pathname.indexOf('market') === -1) return;
     const chips = document.querySelector('.market-main .chips');
     const listings = document.querySelector('.market-main .listings');
     if (!chips || !listings) return;
 
+    // 每個 listing 解析出一個中文部位（英文 tag 或中文 type 皆可）
     const rows = Array.prototype.map.call(listings.querySelectorAll('.listing'), function (el) {
-      const meta = el.querySelector('.listing__meta');
-      let tag = null;
-      if (meta) {
-        meta.querySelectorAll('span').forEach(function (sp) {
-          const t = sp.textContent.trim();
-          if (MARKET_WEAPON_LABEL[t]) tag = t;
-        });
-      }
-      return { el: el, tag: tag };
+      const meta = el.querySelector('.listing__meta') || el;
+      let part = null;
+      meta.querySelectorAll('span').forEach(function (sp) {
+        if (!part) part = resolveMarketPart(sp.textContent);
+      });
+      // 後備：整張 listing 的文字裡找已知部位
+      if (!part) part = resolveMarketPart((el.getAttribute('title') || '').trim());
+      return { el: el, part: part };
     });
     const present = [];
-    rows.forEach(function (r) { if (r.tag && present.indexOf(r.tag) === -1) present.push(r.tag); });
+    rows.forEach(function (r) { if (r.part && present.indexOf(r.part) === -1) present.push(r.part); });
 
     let bar = document.querySelector('.gao-cls-market');
     if (!present.length) { if (bar) bar.remove(); return; }
-    const sig = present.slice().sort().join(',');
+
+    // 依類別排序部位
+    const orderedParts = [];
+    CATEGORIES.forEach(function (c) { c.types.forEach(function (t) { if (present.indexOf(t) !== -1) orderedParts.push(t); }); });
+    present.forEach(function (t) { if (orderedParts.indexOf(t) === -1) orderedParts.push(t); });
+    // 出現的類別
+    const catsPresent = CATEGORIES.filter(function (c) {
+      return c.types.some(function (t) { return present.indexOf(t) !== -1; });
+    });
+
+    const sig = orderedParts.join(',');
     if (!bar || bar.dataset.sig !== sig) {
       if (bar) bar.remove();
       bar = document.createElement('div');
       bar.className = 'gao-cls-market';
       bar.dataset.sig = sig;
-      bar.innerHTML = '<span class="gao-cls-glabel">武器種類</span>';
-      present.sort();
-      present.forEach(function (tag) {
-        const chip = mkChip(MARKET_WEAPON_LABEL[tag], 'mkt');
-        chip.dataset.gaoClsMkt = tag;
-        chip.addEventListener('click', function () { toggleIn(filters.market, tag); saveFilters(); ensureMarketBar(); });
+
+      // 類別列
+      const catLabel = document.createElement('span');
+      catLabel.className = 'gao-cls-glabel';
+      catLabel.textContent = '類別';
+      bar.appendChild(catLabel);
+      catsPresent.forEach(function (cat) {
+        const partsIn = cat.types.filter(function (t) { return present.indexOf(t) !== -1; });
+        const chip = mkChip(cat.label, 'cat');
+        chip.classList.add('gao-cls-cat');
+        chip.dataset.gaoClsMktCat = cat.key;
+        chip.addEventListener('click', function () {
+          const allOn = partsIn.every(function (t) { return filters.market.indexOf(t) !== -1; });
+          partsIn.forEach(function (t) {
+            const i = filters.market.indexOf(t);
+            if (allOn) { if (i !== -1) filters.market.splice(i, 1); }
+            else if (i === -1) filters.market.push(t);
+          });
+          saveFilters(); ensureMarketBar();
+        });
         bar.appendChild(chip);
       });
+
+      // 部位列
+      const partLabel = document.createElement('span');
+      partLabel.className = 'gao-cls-glabel';
+      partLabel.textContent = '部位';
+      bar.appendChild(partLabel);
+      orderedParts.forEach(function (part) {
+        const chip = mkChip(part, 'mkt');
+        chip.dataset.gaoClsMkt = part;
+        chip.addEventListener('click', function () { toggleIn(filters.market, part); saveFilters(); ensureMarketBar(); });
+        bar.appendChild(chip);
+      });
+
       const reset = document.createElement('button');
       reset.type = 'button';
       reset.className = 'gao-cls-reset';
@@ -441,14 +573,20 @@
       chips.parentElement.insertBefore(bar, chips.nextSibling);
     }
 
-    // 套用：有選武器種類時，只顯示符合的武器listing（其餘隱藏）
+    // 套用：有選部位時，只顯示符合的 listing（其餘隱藏）
     const active = filters.market;
     rows.forEach(function (r) {
-      const ok = !active.length || (r.tag && active.indexOf(r.tag) !== -1);
+      const ok = !active.length || (r.part && active.indexOf(r.part) !== -1);
       r.el.classList.toggle('gao-cls-hidden-row', !ok);
     });
     bar.querySelectorAll('.gao-cls-chip[data-gao-cls-mkt]').forEach(function (chip) {
       chip.dataset.active = active.indexOf(chip.dataset.gaoClsMkt) !== -1 ? 'true' : 'false';
+    });
+    bar.querySelectorAll('.gao-cls-chip[data-gao-cls-mkt-cat]').forEach(function (chip) {
+      const cat = CATEGORIES.find(function (c) { return c.key === chip.dataset.gaoClsMktCat; });
+      const partsIn = cat ? cat.types.filter(function (t) { return present.indexOf(t) !== -1; }) : [];
+      const allOn = partsIn.length && partsIn.every(function (t) { return active.indexOf(t) !== -1; });
+      chip.dataset.active = allOn ? 'true' : 'false';
     });
   }
 
