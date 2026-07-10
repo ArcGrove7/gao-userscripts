@@ -9,25 +9,33 @@
 | --- | --- | --- |
 | `gao-eyecare.user.js` | 護眼低飽和主題（WCAG AA） | `gunart-eyecare` |
 | `gao-classify.user.js` | 裝備／素材／市場分類器 | `gunart-classify` |
+| `gao-forge-history.user.js` | 鍛造歷史與期望值面板（本地側錄） | `gunart-forge` |
 
-兩者皆 `@match https://gunartonline.pages.dev/*`、`@grant none`、`@run-at document-start`，
-可只裝其中一支，或兩支併用。
+三者皆 `@match https://gunartonline.pages.dev/*`、`@grant none`、`@run-at document-start`，
+可任意單裝或併用。`gao-forge-history.user.js` 額外採用 MIT 授權（`@license MIT`），
+對應本專案根目錄新增的 `LICENSE`。
 
 ---
 
-## 一、兩支腳本之間會不會互相衝突？
+## 一、三支腳本之間會不會互相衝突？
 
-**不會。** 拆分前兩個模組本來就在各自獨立的 IIFE 中，沒有共用任何變數作用域。
+**不會。** 三個模組各自在獨立的 IIFE 中，沒有共用任何變數作用域。
 逐項核對它們對全域環境的接觸點，全部互不重疊：
 
-| 接觸面 | 護眼主題 | 分類器 | 衝突？ |
-| --- | --- | --- | --- |
-| `localStorage` key | `gao-lowsat-enabled` | `gao_cls_filters_v2` | 否，key 不同 |
-| `window` 旗標 | `__gaoEyeCareLoaded` | `__gaoClassifyLoaded`、`__gaoClsFetchHook` | 否，名稱不同 |
-| CSS class | `gao-lowsat`（掛在 `<html>`） | `gao-cls-*`（自繪 UI） | 否，前綴不同 |
-| DOM 屬性 | `data-gao-theme`、`data-gao-lowsat-*` | `data-gao-cls-*` | 否 |
-| `history.pushState/replaceState` | 包裝（呼叫原函式後排程 rebind） | 包裝（呼叫原函式後排程 remount） | 否，兩者都是**鏈式包裝**，各自保留並呼叫前一個實作 |
-| `window.fetch` | 未碰 | 包裝（`__gaoClsFetchHook` 防重入） | 否 |
+| 接觸面 | 護眼主題 | 分類器 | 鍛造歷史 | 衝突？ |
+| --- | --- | --- | --- | --- |
+| `localStorage` key | `gao-lowsat-enabled` | `gao_cls_filters_v2` | `gao_forge_history_v1`、`gao_forge_ui_v1` | 否，key 皆不同 |
+| `window` 旗標 | `__gaoEyeCareLoaded` | `__gaoClassifyLoaded`、`__gaoClsFetchHook` | `__gaoForgeLoaded`、`__gaoForgeFetchHook`、`__gaoForgeXhrHook` | 否，名稱不同 |
+| CSS class / id | `gao-lowsat`（掛在 `<html>`） | `gao-cls-*`（自繪 UI） | `gao-fh-*`（自繪 UI） | 否，前綴不同 |
+| DOM 屬性 | `data-gao-theme`、`data-gao-lowsat-*` | `data-gao-cls-*` | 無（僅用 id/class） | 否 |
+| 熱鍵 | `Alt+1` / `Alt+2` | 無 | `Alt+3` | 否，鍵不同 |
+| `window.history.pushState/replaceState` | 鏈式包裝 | 鏈式包裝 | 鏈式包裝 | 否，各自保留並呼叫前一個實作 |
+| `window.fetch` | 未碰 | 包裝（`__gaoClsFetchHook` 防重入） | 包裝（`__gaoForgeFetchHook` 防重入） | 否，皆 `orig.apply` 原封回傳 |
+| `XMLHttpRequest` | 未碰 | 未碰 | 包裝（`__gaoForgeXhrHook` 防重入） | 否 |
+
+**鍛造歷史的側錄範圍：** 只被動側錄 `/api/forge/` 底下的**變更型**請求回應（明確排除
+分類器所讀的唯讀清單 `/api/forge/equipment`），不送出任何額外請求、不修改請求或回應，
+資料僅存於本機 `localStorage`。fetch 與 XHR 包裝皆為鏈式，永遠先呼叫原實作並原封回傳。
 
 **CSS 變數依賴：** 分類器的自繪 UI 用到 `var(--q-legendary)`、`var(--bg-elevated)` 等變數，
 這些是**遊戲原生**（或護眼主題）提供的。分類器每一處都寫了 fallback 值
