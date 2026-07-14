@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Gun Art Online Eye-Care Theme
 // @namespace    gunart-eyecare
-// @version      1.0.1
-// @description  Low-saturation dark eye-care theme (WCAG AA) for Gun Art Online. Standalone — no classifier.
+// @version      1.1.0
+// @description  Low-saturation dark eye-care theme (WCAG AA) for Gun Art Online, plus toggles for the announcement marquee and the starting-town player list. Standalone — no classifier.
 // @author       ArcGrove7
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-start
@@ -27,6 +27,22 @@
   const MY_VALUE = "gao-lowsat";
   const MY_LABEL = "Low-Saturation Dark (Eye-Care · WCAG AA)";
   const NATIVE_SELECT = '[data-gao-ext="settings-theme-select"]';
+
+  // Own namespace, kept distinct from the UI Extension's data-gao-ext so both
+  // scripts can inject into the same settings block without colliding.
+  const EC_ATTR = "data-gao-eyecare";
+
+  const MARQUEE_KEY = "gao-hide-marquee";
+  const TOWN_PLAYERS_KEY = "gao-hide-town-players";
+  const HIDE_MARQUEE_CLASS = "gao-hide-marquee";
+  const HIDE_TOWN_PLAYERS_CLASS = "gao-hide-town-players";
+
+  // The starting-town player list is rendered with inline styles only, so the
+  // container has no class to select. Its header is the one stable handle:
+  // the game renders `${zoneName} · 同層玩家`.
+  const TOWN_ZONE_NAME = "起始之鎮";
+  const PLAYER_LIST_HEADER = "同層玩家";
+  const TOWN_LIST_FLAG = "data-gao-ec-town-list";
 
   const DARK_LOWSAT_VARS = `
     --bg-void:#12151a; --bg-deep:#181c22; --bg-panel:#181c22; --bg-elevated:#20252e;
@@ -55,11 +71,81 @@
     html.${THEME_CLASS} body { line-height: 1.6 !important; -webkit-font-smoothing: antialiased; }
   `;
 
+  // Static rules: the toggles only flip classes on <html>, so nothing needs to
+  // be restored by hand when a feature is switched back on.
+  const FEATURE_CSS = `
+    html.${HIDE_MARQUEE_CLASS} .ann-marquee { display: none !important; }
+    html.${HIDE_TOWN_PLAYERS_CLASS} [${TOWN_LIST_FLAG}] { display: none !important; }
+
+    .gao-ec-settings-stack { display: flex; flex-direction: column; gap: var(--s-3); margin-top: var(--s-3); }
+    .gao-ec-settings-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s-4); padding: var(--s-4); background: var(--bg-elevated); border: 1px solid var(--border-faint); }
+    .gao-ec-settings-copy { min-width: 0; }
+    .gao-ec-settings-title { font-family: var(--font-display); font-size: var(--fs-xs); font-weight: 700; letter-spacing: var(--tracking-wider); text-transform: uppercase; color: var(--text-primary); margin-bottom: 6px; }
+    .gao-ec-settings-description { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); line-height: var(--lh-relax); }
+    .gao-ec-settings-toggle { flex-shrink: 0; position: relative; width: 56px; height: 28px; background: var(--bg-input); border: 1px solid var(--border-soft); box-shadow: none; clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px); transition: all var(--dur-med); cursor: pointer; }
+    .gao-ec-settings-toggle span { position: absolute; top: 4px; bottom: 4px; width: 20px; left: 4px; background: var(--border-default); box-shadow: none; clip-path: polygon(2px 0, 100% 0, 100% calc(100% - 2px), calc(100% - 2px) 100%, 0 100%, 0 2px); transition: all var(--dur-med); }
+    .gao-ec-settings-toggle[data-enabled="true"] { background: var(--cyan-500); border-color: var(--cyan-300); }
+    .gao-ec-settings-toggle[data-enabled="true"] span { left: 30px; background: var(--bg-void); }
+  `;
+
   let enabled = localStorage.getItem(STORAGE_KEY) === "1";
+  let hideMarquee = localStorage.getItem(MARQUEE_KEY) === "1";
+  let hideTownPlayers = localStorage.getItem(TOWN_PLAYERS_KEY) === "1";
   let styleEl = null;
+  let featureStyleEl = null;
 
   function css() {
     return enabled ? `:root { ${DARK_LOWSAT_VARS} } ${EXTRA_DARK_CSS}` : "";
+  }
+
+  function applyFeatureStyle() {
+    if (!document.head) return;
+    if (!featureStyleEl) {
+      featureStyleEl = document.createElement("style");
+      featureStyleEl.setAttribute(ATTR, "feature-style");
+      featureStyleEl.textContent = FEATURE_CSS;
+    }
+    document.head.appendChild(featureStyleEl);
+  }
+
+  function applyFeatureFlags() {
+    const root = document.documentElement;
+    root.classList.toggle(HIDE_MARQUEE_CLASS, hideMarquee);
+    root.classList.toggle(HIDE_TOWN_PLAYERS_CLASS, hideTownPlayers);
+  }
+
+  function setHideMarquee(on) {
+    hideMarquee = !!on;
+    localStorage.setItem(MARQUEE_KEY, hideMarquee ? "1" : "0");
+    applyFeatureFlags();
+    syncSettingsPanel();
+  }
+
+  function setHideTownPlayers(on) {
+    hideTownPlayers = !!on;
+    localStorage.setItem(TOWN_PLAYERS_KEY, hideTownPlayers ? "1" : "0");
+    applyFeatureFlags();
+    tagTownPlayerList();
+    syncSettingsPanel();
+  }
+
+  /* Tag the starting-town player list so the static CSS above can hide it.
+   * Only the header text identifies it, and only while the player is actually
+   * in the starting town — other zones keep their list. */
+  function tagTownPlayerList() {
+    for (const stale of document.querySelectorAll(`[${TOWN_LIST_FLAG}]`)) {
+      stale.removeAttribute(TOWN_LIST_FLAG);
+    }
+    if (!hideTownPlayers) return;
+    for (const node of document.querySelectorAll("div")) {
+      // Header + list (or the "no other players" placeholder).
+      if (node.children.length !== 2) continue;
+      const header = node.firstElementChild.textContent.trim();
+      // Exact match: an ancestor's first child would also *contain* this text,
+      // and tagging the ancestor would hide far more than the list.
+      if (header !== `${TOWN_ZONE_NAME} · ${PLAYER_LIST_HEADER}`) continue;
+      node.setAttribute(TOWN_LIST_FLAG, "1");
+    }
   }
 
   function applyStyle() {
@@ -108,10 +194,93 @@
     if (enabled) sel.value = MY_VALUE;
   }
 
+  function createToggle(name, label, onClick) {
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "gao-ec-settings-toggle";
+    toggle.setAttribute(EC_ATTR, name);
+    toggle.setAttribute("aria-label", label);
+    toggle.appendChild(document.createElement("span"));
+    toggle.addEventListener("click", onClick);
+    return toggle;
+  }
+
+  function createRow({ title, description, control }) {
+    const row = document.createElement("div");
+    row.className = "gao-ec-settings-row";
+    const copy = document.createElement("div");
+    copy.className = "gao-ec-settings-copy";
+    const titleEl = document.createElement("div");
+    titleEl.className = "gao-ec-settings-title";
+    titleEl.textContent = title;
+    const descEl = document.createElement("div");
+    descEl.className = "gao-ec-settings-description";
+    descEl.textContent = description;
+    copy.append(titleEl, descEl);
+    row.append(copy, control);
+    return row;
+  }
+
+  function createSettingsPanel() {
+    const panel = document.createElement("div");
+    panel.className = "gao-ec-settings-stack";
+    panel.setAttribute(EC_ATTR, "settings-options");
+    panel.append(
+      createRow({
+        title: "ANNOUNCEMENT MARQUEE / 公告跑馬燈",
+        description: "隱藏頂端捲動的公告跑馬燈 · 僅影響本裝置",
+        control: createToggle("marquee-toggle", "關閉公告跑馬燈", () =>
+          setHideMarquee(!hideMarquee),
+        ),
+      }),
+      createRow({
+        title: "TOWN PLAYER LIST / 起始之鎮玩家顯示",
+        description: "隱藏起始之鎮的同層玩家清單；其他區域不受影響 · 僅影響本裝置",
+        control: createToggle("town-players-toggle", "關閉起始之鎮玩家顯示", () =>
+          setHideTownPlayers(!hideTownPlayers),
+        ),
+      }),
+    );
+    return panel;
+  }
+
+  function syncSettingsPanel() {
+    let block = null;
+    for (const heading of document.querySelectorAll(".blk__title")) {
+      if (!heading.textContent?.includes("Display")) continue;
+      block = heading.closest(".blk");
+      break;
+    }
+    if (!block) return;
+    let panel = block.querySelector(`[${EC_ATTR}="settings-options"]`);
+    if (!panel) {
+      panel = createSettingsPanel();
+      block.appendChild(panel);
+    }
+    const states = [
+      ["marquee-toggle", hideMarquee],
+      ["town-players-toggle", hideTownPlayers],
+    ];
+    for (const [name, on] of states) {
+      const toggle = panel.querySelector(`[${EC_ATTR}="${name}"]`);
+      if (!toggle) continue;
+      toggle.dataset.enabled = String(on);
+      toggle.setAttribute("aria-pressed", String(on));
+    }
+  }
+
   function boot() {
     applyStyle();
+    applyFeatureStyle();
+    applyFeatureFlags();
     bindSelect();
+    syncSettingsPanel();
+    tagTownPlayerList();
   }
+
+  // Flip the classes before first paint so hidden elements never flash in.
+  applyFeatureFlags();
+  applyFeatureStyle();
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot, { once: true });
@@ -119,20 +288,40 @@
     boot();
   }
 
-  const mo = new MutationObserver(() => {
-    if (document.querySelector(NATIVE_SELECT)) bindSelect();
-  });
+  // Tagging scans every div, and this app mutates heavily during battles, so
+  // coalesce bursts into a single pass. Deliberately not requestAnimationFrame:
+  // that never fires while the tab is in the background, which would leave the
+  // list untagged until the tab is focused again.
+  let pending = false;
+  function scheduleSync() {
+    if (pending) return;
+    pending = true;
+    setTimeout(() => {
+      pending = false;
+      onNavigate();
+    }, 0);
+  }
+
+  // Observing childList only: the tagging writes attributes, so it can't
+  // retrigger this observer and loop.
+  const mo = new MutationObserver(scheduleSync);
   mo.observe(document.documentElement, { childList: true, subtree: true });
+
+  function onNavigate() {
+    bindSelect();
+    syncSettingsPanel();
+    tagTownPlayerList();
+  }
 
   for (const key of ["pushState", "replaceState"]) {
     const original = history[key];
     history[key] = function () {
       const result = original.apply(this, arguments);
-      setTimeout(bindSelect, 60);
+      setTimeout(onNavigate, 60);
       return result;
     };
   }
-  window.addEventListener("popstate", () => setTimeout(bindSelect, 60));
+  window.addEventListener("popstate", () => setTimeout(onNavigate, 60));
 
   window.addEventListener("keydown", (e) => {
     if (!e.altKey) return;
