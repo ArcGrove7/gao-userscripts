@@ -2,7 +2,7 @@
 // @name         Gun Art Online Eye-Care Theme
 // @namespace    gunart-eyecare
 // @version      1.1.0
-// @description  Low-saturation dark eye-care theme (WCAG AA) for Gun Art Online, plus toggles for the announcement marquee and the starting-town player list. Standalone — no classifier.
+// @description  ALT+2 開啟護眼模式、初始地玩家隱藏、跑馬燈公告開關
 // @author       ArcGrove7
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-start
