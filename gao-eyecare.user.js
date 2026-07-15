@@ -8,6 +8,8 @@
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-start
 // @grant        none
+// @downloadURL https://update.greasyfork.org/scripts/586118/gun%art%online%eye%care%theme.user.js
+// @updateURL https://update.greasyfork.org/scripts/586118/gun%art%online%eye%care%theme.meta.js
 // ==/UserScript==
 
 /* Split from gao-eyecare-classify-optimized 3.2.0.
