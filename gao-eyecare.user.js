@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         Gun Art Online Eye-Care Theme
 // @namespace    gunart-eyecare
-// @version      1.1.1
+// @version      1.1.2
 // @description  ALT+2 開啟護眼模式、初始地玩家隱藏、跑馬燈公告開關
 // @author       ArcGrove7
+// @license      MIT
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-start
 // @grant        none
